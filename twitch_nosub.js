@@ -9,9 +9,10 @@ const HEADERS = {
     'Content-Type': 'application/json'
 };
 
-// 1. RECHERCHE : On cherche une chaîne par son pseudo
+// --- 1. RECHERCHE (Search) ---
 async function searchResults(keyword) {
     try {
+        // On cherche un streamer par son pseudo exact ou partiel
         const query = {
             query: `query {
                 user(login: "${keyword}") {
@@ -19,7 +20,6 @@ async function searchResults(keyword) {
                     login
                     displayName
                     profileImageURL(width: 300)
-                    description
                 }
             }`
         };
@@ -37,8 +37,10 @@ async function searchResults(keyword) {
             results.push({
                 title: user.displayName,
                 image: user.profileImageURL,
-                href: user.login // On passe le login comme identifiant pour la suite
+                href: user.login // On utilise le login comme identifiant unique
             });
+        } else {
+             // Si pas de résultat exact, on renvoie une liste vide (ou on pourrait implémenter une recherche searchChannels)
         }
 
         return JSON.stringify(results);
@@ -48,7 +50,7 @@ async function searchResults(keyword) {
     }
 }
 
-// 2. DÉTAILS : Infos de la chaîne
+// --- 2. DÉTAILS (Details) ---
 async function extractDetails(login) {
     try {
         const query = {
@@ -64,21 +66,21 @@ async function extractDetails(login) {
         const user = json.data?.user;
 
         const results = [{
-            description: user?.description || 'Aucune description',
-            aliases: 'Twitch Channel',
-            airdate: `Créé le: ${user?.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'Inconnu'}`
+            description: user?.description || 'Chaine Twitch',
+            aliases: 'Twitch',
+            airdate: user?.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'Inconnu'
         }];
 
         return JSON.stringify(results);
     } catch (error) {
-        return JSON.stringify([{ description: 'Erreur', aliases: '', airdate: '' }]);
+        return JSON.stringify([{ description: 'Erreur chargement', aliases: '', airdate: '' }]);
     }
 }
 
-// 3. ÉPISODES : Liste des VODs (Archives)
+// --- 3. ÉPISODES (VODs) ---
 async function extractEpisodes(login) {
     try {
-        // On demande une image plus grande (640x360) pour un meilleur rendu
+        // On récupère les 20 dernières VODs avec une image HD
         const query = {
             query: `query {
                 user(login: "${login}") {
@@ -109,35 +111,27 @@ async function extractEpisodes(login) {
         const episodes = edges.map((edge, index) => {
             const video = edge.node;
             
-            // Calculs de formatage
-            const duration = Math.floor(video.lengthSeconds / 60);
-            let dateStr = "Date inconnue";
-            try {
-                dateStr = new Date(video.publishedAt).toLocaleDateString();
-            } catch(e) {}
+            // Formatage de la durée
+            const minutes = Math.floor(video.lengthSeconds / 60);
+            const hours = Math.floor(minutes / 60);
+            const mins = minutes % 60;
+            const timeStr = hours > 0 ? `${hours}h${mins}` : `${mins}min`;
+            
+            // Formatage date
+            const dateStr = new Date(video.publishedAt).toLocaleDateString();
 
-            // IMAGE : On s'assure d'avoir une URL valide
-            // Parfois Twitch renvoie une URL sans l'image générée, on met un placeholder au cas où
-            const imgUrl = video.previewThumbnailURL || "https://vod-secure.twitch.tv/_404/404_preview-640x360.jpg";
+            // Gestion image (Fallback si vide)
+            let imgUrl = video.previewThumbnailURL;
+            if(!imgUrl || imgUrl.includes('404_preview')) {
+                 imgUrl = "https://vod-secure.twitch.tv/_404/404_preview-640x360.jpg";
+            }
 
             return {
-                href: video.id,
-                
-                // --- NUMÉROTATION ---
-                number: index + 1, // 1, 2, 3... (Indispensable pour l'ordre)
-                season: 1,         // On force la saison 1 pour grouper
-
-                // --- TITRES (On met les deux pour être sûr) ---
-                title: video.title,
-                name: video.title, // Certaines apps cherchent "name" au lieu de "title"
-
-                // --- IMAGES (On met tous les formats possibles) ---
-                image: imgUrl,
-                thumbnail: imgUrl,
-                poster: imgUrl,
-
-                // --- DESCRIPTION ---
-                description: `📺 ${video.title}\n📅 ${dateStr} • ⏱ ${duration} min`
+                href: video.id, // ID de la VOD
+                number: index + 1, // Numéro 1, 2, 3... pour l'ordre
+                title: video.title, // Vrai titre
+                image: imgUrl, // Vraie image
+                description: `📅 ${dateStr} • ⏳ ${timeStr} • 👀 ${video.viewCount} vues`
             };
         });
 
@@ -148,13 +142,13 @@ async function extractEpisodes(login) {
     }
 }
 
-
-// 4. STREAM : La logique NoSub (Token -> Officiel ou Hack Storyboard)
+// --- 4. STREAM (Le Hack NoSub) ---
 async function extractStreamUrl(vodId) {
     try {
         let streams = [];
 
-        // ÉTAPE A : Tenter d'avoir le lien officiel (si pas sub-only ou si bug Twitch)
+        // --- METHODE A : OFFICIEL ---
+        // On essaie d'abord poliment avec l'API Twitch
         const tokenQuery = {
             operationName: "PlaybackAccessToken_Template",
             query: "query PlaybackAccessToken_Template($login: String!, $isLive: Boolean!, $vodID: ID!, $isVod: Boolean!, $playerType: String!) { streamPlaybackAccessToken(channelName: $login, params: {platform: \"web\", playerBackend: \"mediaplayer\", playerType: $playerType}) @include(if: $isLive) { value signature __typename } videoPlaybackAccessToken(id: $vodID, params: {platform: \"web\", playerBackend: \"mediaplayer\", playerType: $playerType}) @include(if: $isVod) { value signature __typename } }",
@@ -172,18 +166,18 @@ async function extractStreamUrl(vodId) {
         if (tokenData) {
             const officialUrl = `https://usher.ttvnw.net/vod/${vodId}.m3u8?nauth=${tokenData.value}&nauthsig=${tokenData.signature}&allow_source=true&player_backend=mediaplayer`;
             
-            // On teste si le lien officiel fonctionne (Code 200)
+            // On vérifie si le lien fonctionne (Status 200)
             const check = await soraFetch(officialUrl);
             if (check && check.status === 200) {
                 streams.push({
                     title: "Source (Officiel)",
-                    streamUrl: officialUrl,
+                    streamUrl: officialUrl, // Sora utilise souvent streamUrl ou file
                     headers: { "Referer": "https://www.twitch.tv/" }
                 });
             }
         }
 
-        // ÉTAPE B : Si on n'a pas de flux officiel (probablement Sub-Only), on lance le Hack
+        // --- METHODE B : HACK STORYBOARD (Si officiel échoue) ---
         if (streams.length === 0) {
             const storyboardQuery = {
                 query: `query { video(id: "${vodId}") { seekPreviewsURL } }`
@@ -198,20 +192,20 @@ async function extractStreamUrl(vodId) {
             const seekPreviewsURL = sbJson.data?.video?.seekPreviewsURL;
 
             if (seekPreviewsURL) {
-                // Logique du Hack Storyboard
-                // URL type: https://.../storyboards/HASH_storyboard_1.jpg
+                // Analyse de l'URL pour trouver le Hash secret
+                // URL Type: https://[DOMAINE]/.../storyboards/[HASH]_storyboard_1.jpg
                 const urlParts = seekPreviewsURL.split('/');
                 const sbIndex = urlParts.indexOf("storyboards");
                 
                 if (sbIndex > 0) {
                     const domain = urlParts[2]; // ex: dqrpb9wgowsf5.cloudfront.net
-                    const specialHash = urlParts[sbIndex - 1];
+                    const specialHash = urlParts[sbIndex - 1]; // Le dossier juste avant "storyboards"
                     
-                    // On reconstruit le lien "chunked" (Qualité Source)
+                    // On reconstruit le lien .m3u8 manuellement
                     const hackedUrl = `https://${domain}/${specialHash}/chunked/index-dvr.m3u8`;
                     
                     streams.push({
-                        title: "Source (NoSub Hack)",
+                        title: "Source (NoSub Bypass)",
                         streamUrl: hackedUrl,
                         headers: { "Referer": "https://www.twitch.tv/" }
                     });
@@ -219,26 +213,35 @@ async function extractStreamUrl(vodId) {
             }
         }
 
-        return JSON.stringify({ streams: streams, subtitles: "" });
+        const results = {
+            streams: streams,
+            subtitles: []
+        };
+
+        return JSON.stringify(results);
 
     } catch (error) {
         console.log('Stream error: ' + error);
-        return JSON.stringify({ streams: [], subtitles: "" });
+        return JSON.stringify({ streams: [], subtitles: [] });
     }
 }
 
 // --- FONCTION UTILITAIRE SORA (Obligatoire) ---
+// Cette fonction permet d'utiliser le fetch natif de l'app si dispo, ou le fetch standard sinon
 async function soraFetch(url, options = { headers: {}, method: 'GET', body: null, encoding: 'utf-8' }) {
     try {
-        // Sora expose fetchv2 globalement
-        return await fetchv2(
-            url,
-            options.headers ?? {},
-            options.method ?? 'GET',
-            options.body ?? null,
-            true,
-            options.encoding ?? 'utf-8'
-        );
+        if (typeof fetchv2 !== 'undefined') {
+            return await fetchv2(
+                url,
+                options.headers ?? {},
+                options.method ?? 'GET',
+                options.body ?? null,
+                true,
+                options.encoding ?? 'utf-8'
+            );
+        } else {
+            return await fetch(url, options);
+        }
     } catch(e) {
         try {
             return await fetch(url, options);
