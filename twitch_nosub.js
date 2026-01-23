@@ -72,7 +72,7 @@ async function extractDetails(login) {
     }
 }
 
-// --- 3. ÉPISODES (Correction ici) ---
+// --- 3. ÉPISODES ---
 async function extractEpisodes(login) {
     try {
         const query = {
@@ -118,7 +118,7 @@ async function extractEpisodes(login) {
             if (!finalTitle || finalTitle.trim() === "") {
                 finalTitle = `VOD du ${dateStr}`;
             }
-            // Nettoyage basique des guillemets
+            // Nettoyage : On enlève les guillemets qui cassent le JSON
             finalTitle = finalTitle.replace(/"/g, "'");
 
             console.log(`[Twitch] VOD ${index+1}: ${finalTitle}`);
@@ -131,20 +131,23 @@ async function extractEpisodes(login) {
                 imgUrl = imgUrl.replace("{width}", "640").replace("{height}", "360");
             }
 
+            // CALCUL DURÉE EN TEXTE (Correction Critique)
+            const minutes = Math.floor(video.lengthSeconds / 60);
+            const durationStr = `${minutes} min`;
+
             return {
                 href: video.id,
                 number: index + 1,
-                season: 1, // On force la saison 1
+                season: 1, 
                 
-                // On remplit tout
                 title: finalTitle,
-                name: finalTitle,
+                name: finalTitle, // Doublon sécurité
                 
                 image: imgUrl,
-                thumbnail: imgUrl,
+                thumbnail: imgUrl, // Doublon sécurité
                 
-                // On passe la durée brute (secondes) car les logs montraient "duration: nil"
-                duration: video.lengthSeconds,
+                // C'est ici que ça bloquait : on envoie du texte maintenant
+                duration: durationStr, 
                 
                 description: `${finalTitle}\n${dateStr}`
             };
