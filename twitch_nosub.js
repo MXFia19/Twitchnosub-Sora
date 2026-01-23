@@ -76,9 +76,9 @@ async function extractDetails(login) {
 }
 
 // 3. ÉPISODES : Liste des VODs (Archives)
-// 3. ÉPISODES : Liste des VODs (Archives)
 async function extractEpisodes(login) {
     try {
+        // On demande une image plus grande (640x360) pour un meilleur rendu
         const query = {
             query: `query {
                 user(login: "${login}") {
@@ -89,7 +89,7 @@ async function extractEpisodes(login) {
                                 title
                                 publishedAt
                                 lengthSeconds
-                                previewThumbnailURL(height: 180, width: 320)
+                                previewThumbnailURL(height: 360, width: 640)
                                 viewCount
                             }
                         }
@@ -106,26 +106,38 @@ async function extractEpisodes(login) {
         const json = await responseText.json();
         const edges = json.data?.user?.videos?.edges || [];
 
-        // On transforme chaque VOD en "épisode"
         const episodes = edges.map((edge, index) => {
             const video = edge.node;
-            const duration = Math.floor(video.lengthSeconds / 60);
-            const date = new Date(video.publishedAt).toLocaleDateString();
             
+            // Calculs de formatage
+            const duration = Math.floor(video.lengthSeconds / 60);
+            let dateStr = "Date inconnue";
+            try {
+                dateStr = new Date(video.publishedAt).toLocaleDateString();
+            } catch(e) {}
+
+            // IMAGE : On s'assure d'avoir une URL valide
+            // Parfois Twitch renvoie une URL sans l'image générée, on met un placeholder au cas où
+            const imgUrl = video.previewThumbnailURL || "https://vod-secure.twitch.tv/_404/404_preview-640x360.jpg";
+
             return {
-                href: video.id, // ID pour le lien
+                href: video.id,
                 
-                // IMPORTANT : Un numéro unique (index + 1) pour éviter "Episode 1" partout
-                number: index + 1, 
-                
-                // Le titre exact de la VOD
-                title: video.title, 
-                
-                // La miniature spécifique de la VOD
-                image: video.previewThumbnailURL, 
-                
-                // Une petite description (souvent affichée en sous-titre)
-                description: `📅 ${date} • ⏱ ${duration} min • 👀 ${video.viewCount} vues`
+                // --- NUMÉROTATION ---
+                number: index + 1, // 1, 2, 3... (Indispensable pour l'ordre)
+                season: 1,         // On force la saison 1 pour grouper
+
+                // --- TITRES (On met les deux pour être sûr) ---
+                title: video.title,
+                name: video.title, // Certaines apps cherchent "name" au lieu de "title"
+
+                // --- IMAGES (On met tous les formats possibles) ---
+                image: imgUrl,
+                thumbnail: imgUrl,
+                poster: imgUrl,
+
+                // --- DESCRIPTION ---
+                description: `📺 ${video.title}\n📅 ${dateStr} • ⏱ ${duration} min`
             };
         });
 
@@ -135,6 +147,7 @@ async function extractEpisodes(login) {
         return JSON.stringify([]);
     }
 }
+
 
 // 4. STREAM : La logique NoSub (Token -> Officiel ou Hack Storyboard)
 async function extractStreamUrl(vodId) {
