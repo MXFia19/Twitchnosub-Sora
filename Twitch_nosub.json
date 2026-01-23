@@ -1,9 +1,9 @@
 {
     "sourceName": "Twitch NoSub",
-    "iconUrl": "https://upload.wikimedia.org/wikipedia/commons/d/d3/Twitch_Glitch_Logo_Purple.svg",
+    "iconUrl": "https://fr.wikipedia.org/wiki/Fichier:Twitch.jpg",
     "author": {
         "name": "MXFia19",
-        "icon": "",
+        "icon": "https://fr.wikipedia.org/wiki/Fichier:Twitch.jpg",
         "url": ""
     },
     "version": "1.0.0",
