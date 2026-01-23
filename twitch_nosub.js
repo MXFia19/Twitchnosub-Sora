@@ -11,9 +11,9 @@ const HEADERS = {
 
 // --- UTILITAIRE : Nettoyer les chaines pour éviter les erreurs JSON ---
 function cleanString(str) {
-    if (!str) return "";
-    // Remplace les guillemets doubles par des simples pour ne pas casser le JSON.stringify
-    return str.replace(/"/g, "'").replace(/\n/g, " ").trim();
+    if (!str) return "Inconnu";
+    // Remplace les guillemets doubles par des simples et enlève les sauts de ligne
+    return String(str).replace(/"/g, "'").replace(/\n/g, " ").trim();
 }
 
 // --- 1. RECHERCHE ---
@@ -41,7 +41,7 @@ async function searchResults(keyword) {
         const results = [];
         if (user) {
             results.push({
-                title: user.displayName,
+                title: cleanString(user.displayName),
                 image: user.profileImageURL,
                 href: user.login
             });
@@ -116,32 +116,29 @@ async function extractEpisodes(login) {
             // Calcul durée
             const minutes = Math.floor(video.lengthSeconds / 60);
             
-            // Gestion Image : Twitch renvoie parfois des templates ou des 404
+            // --- GESTION ROBUSTE DE L'IMAGE ---
             let imgUrl = video.previewThumbnailURL;
+            
+            // Si pas d'URL ou URL cassée par défaut
             if (!imgUrl || imgUrl.includes("404_preview")) {
-                // Placeholder générique si pas d'image
                 imgUrl = "https://vod-secure.twitch.tv/_404/404_preview-640x360.jpg";
             }
-            // Force le remplacement des templates si présents
-            imgUrl = imgUrl.replace("{width}", "640").replace("{height}", "360");
+            
+            // Remplacement des templates {width} et {height} si présents
+            if (imgUrl.includes("{width}")) {
+                imgUrl = imgUrl.replace("{width}", "640").replace("{height}", "360");
+            }
 
+            // Nettoyage du titre pour éviter le crash JSON
             const safeTitle = cleanString(video.title);
 
             return {
                 href: video.id,
                 number: index + 1,
-                
-                // On met tous les champs possibles pour que Sora trouve le titre
                 title: safeTitle,
-                name: safeTitle,
-                
-                // On met tous les champs possibles pour l'image
                 image: imgUrl,
-                img: imgUrl,
-                thumbnail: imgUrl,
-                
-                // Description courte sans saut de ligne
-                description: `${minutes} min - ${video.viewCount} vues`
+                // Certaines versions de Sora utilisent 'thumbnail'
+                thumbnail: imgUrl 
             };
         });
 
