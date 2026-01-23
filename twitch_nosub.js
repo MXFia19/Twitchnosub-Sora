@@ -76,6 +76,7 @@ async function extractDetails(login) {
 }
 
 // 3. ÉPISODES : Liste des VODs (Archives)
+// 3. ÉPISODES : Liste des VODs (Archives)
 async function extractEpisodes(login) {
     try {
         const query = {
@@ -89,6 +90,7 @@ async function extractEpisodes(login) {
                                 publishedAt
                                 lengthSeconds
                                 previewThumbnailURL(height: 180, width: 320)
+                                viewCount
                             }
                         }
                     }
@@ -104,15 +106,26 @@ async function extractEpisodes(login) {
         const json = await responseText.json();
         const edges = json.data?.user?.videos?.edges || [];
 
-        const episodes = edges.map(edge => {
+        // On transforme chaque VOD en "épisode"
+        const episodes = edges.map((edge, index) => {
             const video = edge.node;
-            // Conversion durée secondes -> minutes
             const duration = Math.floor(video.lengthSeconds / 60);
+            const date = new Date(video.publishedAt).toLocaleDateString();
             
             return {
-                href: video.id, // L'ID de la VOD servira pour extraire le flux
-                number: 1, // Pas de numéro de saison pertinent sur Twitch
-                title: `${video.title} (${duration} min) - ${new Date(video.publishedAt).toLocaleDateString()}`
+                href: video.id, // ID pour le lien
+                
+                // IMPORTANT : Un numéro unique (index + 1) pour éviter "Episode 1" partout
+                number: index + 1, 
+                
+                // Le titre exact de la VOD
+                title: video.title, 
+                
+                // La miniature spécifique de la VOD
+                image: video.previewThumbnailURL, 
+                
+                // Une petite description (souvent affichée en sous-titre)
+                description: `📅 ${date} • ⏱ ${duration} min • 👀 ${video.viewCount} vues`
             };
         });
 
