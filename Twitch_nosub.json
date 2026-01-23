@@ -1,0 +1,20 @@
+{
+    "sourceName": "Twitch NoSub",
+    "iconUrl": "https://upload.wikimedia.org/wikipedia/commons/d/d3/Twitch_Glitch_Logo_Purple.svg",
+    "author": {
+        "name": "Toi",
+        "icon": "",
+        "url": ""
+    },
+    "version": "1.0.0",
+    "language": "Multi",
+    "streamType": "HLS",
+    "quality": "Source",
+    "baseUrl": "https://twitch.tv/",
+    "searchBaseUrl": "",
+    "scriptUrl": "L_URL_RAW_DE_TON_FICHIER_JS_ICI",
+    "type": "shows",
+    "downloadSupport": false,
+    "asyncJS": true,
+    "softsub": false
+}
