@@ -1,0 +1,20 @@
+{
+  "sourceName": "Twitch NoSub",
+  "iconUrl": "https://pngimg.com/uploads/twitch/twitch_PNG13.png",
+  "author": {
+    "name": "MXFia19",
+    "icon": "https://i.pinimg.com/736x/8b/db/30/8bdb3020e340f6178b54460b183f0a73.jpg",
+    "url": "https://discordapp.com/users/572441652774305807"
+  },
+  "version": "1.0.0",
+  "language": "Multi",
+  "streamType": "HLS",
+  "quality": "Source",
+  "baseUrl": "https://twitch.tv/",
+  "searchBaseUrl": "",
+  "scriptUrl": "https://raw.githubusercontent.com/MXFia19/Test/refs/heads/main/twitch_nosub.js",
+  "type": "movie",
+  "downloadSupport": false,
+  "asyncJS": true,
+  "softsub": false
+}
