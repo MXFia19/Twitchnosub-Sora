@@ -9,35 +9,20 @@ const HEADERS = {
     'Content-Type': 'application/json'
 };
 
-// --- FONCTION DE NETTOYAGE (CRITIQUE POUR EVITER LE JSON ERROR) ---
 function cleanText(str) {
     if (!str) return "";
-    // 1. Remplace les guillemets doubles par des simples
-    // 2. Enlève les retours à la ligne
-    // 3. Enlève les barres obliques inverses
     return str.replace(/"/g, "'").replace(/\n/g, " ").replace(/\\/g, "").trim();
 }
 
-// --- 1. RECHERCHE ---
 async function searchResults(keyword) {
     try {
         const cleanKeyword = keyword.trim().toLowerCase();
         const query = {
-            query: `query {
-                user(login: "${cleanKeyword}") {
-                    id, login, displayName, profileImageURL(width: 300)
-                }
-            }`
+            query: `query { user(login: "${cleanKeyword}") { id, login, displayName, profileImageURL(width: 300) } }`
         };
-
-        const responseText = await soraFetch(GQL_URL, {
-            method: 'POST',
-            headers: HEADERS,
-            body: JSON.stringify(query)
-        });
+        const responseText = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(query) });
         const json = await responseText.json();
         const user = json.data?.user;
-
         const results = [];
         if (user) {
             results.push({
@@ -52,22 +37,15 @@ async function searchResults(keyword) {
     }
 }
 
-// --- 2. DÉTAILS ---
 async function extractDetails(login) {
     try {
         const query = {
             query: `query { user(login: "${login}") { description createdAt } }`
         };
-
-        const responseText = await soraFetch(GQL_URL, {
-            method: 'POST',
-            headers: HEADERS,
-            body: JSON.stringify(query)
-        });
+        const responseText = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(query) });
         const json = await responseText.json();
         const user = json.data?.user;
-
-        const safeDesc = cleanText(user?.description || 'Chaine Twitch');
+        const safeDesc = cleanText(user?.description || 'Twitch Channel');
 
         const results = [{
             description: safeDesc,
@@ -80,12 +58,10 @@ async function extractDetails(login) {
     }
 }
 
-// --- 3. ÉPISODES (TITRES ET IMAGES SÉCURISÉS) ---
 async function extractEpisodes(login) {
     try {
         const episodes = [];
 
-        // --- A. LIVE ---
         try {
             const queryLive = {
                 query: `query { user(login: "${login}") { stream { id title game { name } previewImage { url } } } }`
@@ -97,15 +73,13 @@ async function extractEpisodes(login) {
             if (currentStream) {
                 const gameName = cleanText(currentStream.game?.name || "Jeu inconnu");
                 const liveTitle = cleanText(currentStream.title || "Live en cours");
-                
                 let liveImg = "https://pngimg.com/uploads/twitch/twitch_PNG13.png";
                 if (currentStream.previewImage?.url) {
                     liveImg = currentStream.previewImage.url.replace("{width}", "1280").replace("{height}", "720");
                 }
-
                 episodes.push({
-                    href: "LIVE_" + login, 
-                    number: 0, 
+                    href: "LIVE_" + login,
+                    number: 0,
                     season: 1,
                     title: "🔴 EN DIRECT : " + liveTitle,
                     name: "🔴 EN DIRECT : " + liveTitle,
@@ -115,22 +89,11 @@ async function extractEpisodes(login) {
                     description: `Actuellement en direct sur : ${gameName}\n${liveTitle}`
                 });
             }
-        } catch (e) { console.log("Live Error: " + e); }
+        } catch (e) {}
 
-        // --- B. VODs ---
         try {
             const queryVideos = {
-                query: `query {
-                    user(login: "${login}") {
-                        videos(first: 20) {
-                            edges {
-                                node {
-                                    id, title, publishedAt, lengthSeconds, previewThumbnailURL(height: 360, width: 640)
-                                }
-                            }
-                        }
-                    }
-                }`
+                query: `query { user(login: "${login}") { videos(first: 20) { edges { node { id, title, publishedAt, lengthSeconds, previewThumbnailURL(height: 360, width: 640) } } } } }`
             };
             const respVideos = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(queryVideos) });
             const jsonVideos = await respVideos.json();
@@ -138,40 +101,33 @@ async function extractEpisodes(login) {
 
             edges.forEach((edge, index) => {
                 const video = edge.node;
-                
-                // Date
                 let dateStr = video.publishedAt ? new Date(video.publishedAt).toLocaleDateString() : "Inconnu";
-
-                // Titre & Description (Nettoyage)
                 let rawTitle = video.title;
                 if (!rawTitle || rawTitle.trim() === "") {
                     rawTitle = `VOD du ${dateStr}`;
                 }
                 const safeTitle = cleanText(rawTitle);
-                
-                // Image (HD)
                 let imgUrl = video.previewThumbnailURL;
                 if (!imgUrl || imgUrl.includes("404_preview")) {
                     imgUrl = "https://vod-secure.twitch.tv/_404/404_preview-640x360.jpg";
                 } else {
                     imgUrl = imgUrl.replace("{width}", "1280").replace("{height}", "720");
                 }
-
                 const minutes = Math.floor(video.lengthSeconds / 60);
 
                 episodes.push({
                     href: video.id,
                     number: index + 1,
-                    season: 1, 
+                    season: 1,
                     title: safeTitle,
                     name: safeTitle,
                     image: imgUrl,
                     thumbnail: imgUrl,
-                    duration: `${minutes} min`, 
+                    duration: `${minutes} min`,
                     description: `${safeTitle}\n${dateStr} - ${minutes} mins`
                 });
             });
-        } catch (e) { console.log("Vod Error: " + e); }
+        } catch (e) {}
 
         return JSON.stringify(episodes);
     } catch (error) {
@@ -179,12 +135,10 @@ async function extractEpisodes(login) {
     }
 }
 
-// --- 4. STREAM (LECTURE) ---
 async function extractStreamUrl(vodId) {
     try {
         let streams = [];
         const isLive = vodId.toString().startsWith("LIVE_");
-        
         let login = "";
         let realVodId = vodId;
 
@@ -194,7 +148,6 @@ async function extractStreamUrl(vodId) {
             realVodId = vodId;
         }
 
-        // Si LIVE -> Officiel
         if (isLive) {
             try {
                 const tokenQuery = {
@@ -210,19 +163,14 @@ async function extractStreamUrl(vodId) {
                     const safeToken = encodeURIComponent(tokenData.value);
                     const safeSig = encodeURIComponent(tokenData.signature);
                     const officialUrl = `https://usher.ttvnw.net/api/channel/hls/${login}.m3u8?token=${safeToken}&sig=${safeSig}&allow_source=true&player_backend=mediaplayer`;
-                    
                     streams.push({
                         title: "Live (Officiel)",
                         streamUrl: officialUrl,
                         headers: { "Referer": "https://www.twitch.tv/" }
                     });
                 }
-            } catch(e) {}
-        } 
-        
-        // Si VOD -> NoSub (Priorité) + Officiel (Secondaire)
-        else {
-            // Option A: NoSub (Hack)
+            } catch (e) {}
+        } else {
             try {
                 const storyboardQuery = { query: `query { video(id: "${realVodId}") { seekPreviewsURL } }` };
                 const sbResp = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(storyboardQuery) });
@@ -240,9 +188,8 @@ async function extractStreamUrl(vodId) {
                         });
                     }
                 }
-            } catch(e) {}
+            } catch (e) {}
 
-            // Option B: Officiel (si besoin)
             try {
                 const tokenQuery = {
                     operationName: "PlaybackAccessToken_Template",
@@ -257,24 +204,21 @@ async function extractStreamUrl(vodId) {
                     const safeToken = encodeURIComponent(tokenData.value);
                     const safeSig = encodeURIComponent(tokenData.signature);
                     const officialUrl = `https://usher.ttvnw.net/vod/${realVodId}.m3u8?nauth=${safeToken}&nauthsig=${safeSig}&allow_source=true&player_backend=mediaplayer`;
-                    
                     streams.push({
                         title: "Source Officielle (Qualité Max)",
                         streamUrl: officialUrl,
                         headers: { "Referer": "https://www.twitch.tv/" }
                     });
                 }
-            } catch(e) {}
+            } catch (e) {}
         }
 
         return JSON.stringify({ streams: streams, subtitles: [] });
-
     } catch (error) {
         return JSON.stringify({ streams: [], subtitles: [] });
     }
 }
 
-// --- UTILITAIRE SORA ---
 async function soraFetch(url, options = { headers: {}, method: 'GET', body: null, encoding: 'utf-8' }) {
     try {
         if (typeof fetchv2 !== 'undefined') {
@@ -282,7 +226,7 @@ async function soraFetch(url, options = { headers: {}, method: 'GET', body: null
         } else {
             return await fetch(url, options);
         }
-    } catch(e) {
-        try { return await fetch(url, options); } catch(error) { return null; }
+    } catch (e) {
+        try { return await fetch(url, options); } catch (error) { return null; }
     }
 }
