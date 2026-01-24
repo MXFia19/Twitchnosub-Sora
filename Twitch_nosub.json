@@ -13,7 +13,7 @@
   "baseUrl": "https://twitch.tv/",
   "searchBaseUrl": "https://gql.twitch.tv/gql",
   "scriptUrl": "https://raw.githubusercontent.com/MXFia19/Twitchnosub-Sora/refs/heads/main/script_twitch_nosub.js",
-  "type": "movie",
+  "type": "vod/livestream",
   "downloadSupport": false,
   "asyncJS": true,
   "softsub": false
