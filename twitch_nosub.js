@@ -79,7 +79,7 @@ async function extractEpisodes(login) {
     try {
         const episodes = [];
 
-        // ÉTAPE A : Récupérer le LIVE (Requête dédiée)
+        // ÉTAPE A : Récupérer le LIVE
         try {
             const queryLive = {
                 query: `query { user(login: "${login}") { stream { id title game { name } previewImage { url } } } }`
@@ -98,8 +98,8 @@ async function extractEpisodes(login) {
                     href: "LIVE_" + login, 
                     number: 0, 
                     season: 1,
-                    title: " EN DIRECT : " + currentStream.title,
-                    name: " EN DIRECT : " + currentStream.title,
+                    title: "EN DIRECT : " + currentStream.title,
+                    name: "EN DIRECT : " + currentStream.title,
                     image: liveImg,
                     thumbnail: liveImg,
                     duration: "LIVE",
@@ -110,9 +110,8 @@ async function extractEpisodes(login) {
             console.log("[Twitch] Erreur Live: " + e);
         }
 
-        // ÉTAPE B : Récupérer les VODs (Requête simplifiée sans filtres complexes)
+        // ÉTAPE B : Récupérer les VODs
         try {
-            // Note : J'ai retiré 'type: ARCHIVE' pour récupérer aussi les Uploads et Highlights
             const queryVideos = {
                 query: `query {
                     user(login: "${login}") {
@@ -145,7 +144,10 @@ async function extractEpisodes(login) {
                     dateStr = new Date(video.publishedAt).toLocaleDateString();
                 }
 
-                let finalTitle = video.title || `VOD du ${dateStr}`;
+                let finalTitle = video.title;
+                if (!finalTitle || finalTitle.trim() === "") {
+                    finalTitle = `VOD du ${dateStr}`;
+                }
                 finalTitle = finalTitle.replace(/"/g, "'");
 
                 let imgUrl = video.previewThumbnailURL;
@@ -181,7 +183,7 @@ async function extractEpisodes(login) {
     }
 }
 
-// --- 4. STREAM ---
+// --- 4. STREAM (ACTIVATION FORCEE DU BACKUP) ---
 async function extractStreamUrl(vodId) {
     try {
         let streams = [];
@@ -196,6 +198,7 @@ async function extractStreamUrl(vodId) {
             realVodId = vodId;
         }
 
+        // --- METHODE A : Token Officiel (Par défaut) ---
         const tokenQuery = {
             operationName: "PlaybackAccessToken_Template",
             query: "query PlaybackAccessToken_Template($login: String!, $isLive: Boolean!, $vodID: ID!, $isVod: Boolean!, $playerType: String!) { streamPlaybackAccessToken(channelName: $login, params: {platform: \"web\", playerBackend: \"mediaplayer\", playerType: $playerType}) @include(if: $isLive) { value signature __typename } videoPlaybackAccessToken(id: $vodID, params: {platform: \"web\", playerBackend: \"mediaplayer\", playerType: $playerType}) @include(if: $isVod) { value signature __typename } }",
@@ -234,13 +237,15 @@ async function extractStreamUrl(vodId) {
             }
             
             streams.push({
-                title: isLive ? "Source (Live)" : "Source (Officiel)",
+                title: isLive ? "Source (Live)" : "Source 1 (Officiel)",
                 streamUrl: officialUrl,
                 headers: { "Referer": "https://www.twitch.tv/" }
             });
         }
 
-        if (streams.length === 0 && !isLive) {
+        // --- METHODE B : Hack Storyboard (NoSub) ---
+        // On force cette méthode pour les VODs, même si l'officielle a été trouvée
+        if (!isLive) {
             const storyboardQuery = {
                 query: `query { video(id: "${realVodId}") { seekPreviewsURL } }`
             };
@@ -260,9 +265,11 @@ async function extractStreamUrl(vodId) {
                 if (sbIndex > 0) {
                     const domain = urlParts[2];
                     const specialHash = urlParts[sbIndex - 1];
+                    // URL Magique qui contourne les pubs et le sub-only
                     const hackedUrl = `https://${domain}/${specialHash}/chunked/index-dvr.m3u8`;
+                    
                     streams.push({
-                        title: "Source (Backup)",
+                        title: "Source 2 (NoSub/Backup)",
                         streamUrl: hackedUrl,
                         headers: { "Referer": "https://www.twitch.tv/" }
                     });
