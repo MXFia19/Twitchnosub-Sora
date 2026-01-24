@@ -12,7 +12,7 @@
   "quality": "Source",
   "baseUrl": "https://twitch.tv/",
   "searchBaseUrl": "",
-  "scriptUrl": "https://raw.githubusercontent.com/MXFia19/Test/refs/heads/main/twitch_nosub.js",
+  "scriptUrl": "https://raw.githubusercontent.com/MXFia19/Twitchnosub-Sora/refs/heads/main/script_twitch_nosub.js",
   "type": "movie",
   "downloadSupport": false,
   "asyncJS": true,
