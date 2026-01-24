@@ -12,9 +12,12 @@ const HEADERS = {
 // --- 1. RECHERCHE ---
 async function searchResults(keyword) {
     try {
+        // CORRECTION : Twitch demande le "login" en minuscule pour trouver la chaîne
+        const cleanKeyword = keyword.trim().toLowerCase();
+
         const query = {
             query: `query {
-                user(login: "${keyword}") {
+                user(login: "${cleanKeyword}") {
                     id
                     login
                     displayName
@@ -107,21 +110,17 @@ async function extractEpisodes(login) {
         const episodes = edges.map((edge, index) => {
             const video = edge.node;
             
-            // Calcul date
             let dateStr = "Inconnu";
             if (video.publishedAt) {
                 dateStr = new Date(video.publishedAt).toLocaleDateString();
             }
 
-            // Gestion Titre (Fallback si vide)
             let finalTitle = video.title;
             if (!finalTitle || finalTitle.trim() === "") {
                 finalTitle = `VOD du ${dateStr}`;
             }
-            // Nettoyage : On enlève les guillemets qui cassent le JSON
+            // Nettoyage des guillemets pour ne pas casser le JSON
             finalTitle = finalTitle.replace(/"/g, "'");
-
-            console.log(`[Twitch] VOD ${index+1}: ${finalTitle}`);
 
             // Gestion Image
             let imgUrl = video.previewThumbnailURL;
@@ -131,7 +130,6 @@ async function extractEpisodes(login) {
                 imgUrl = imgUrl.replace("{width}", "640").replace("{height}", "360");
             }
 
-            // CALCUL DURÉE EN TEXTE (Correction Critique)
             const minutes = Math.floor(video.lengthSeconds / 60);
             const durationStr = `${minutes} min`;
 
@@ -139,16 +137,11 @@ async function extractEpisodes(login) {
                 href: video.id,
                 number: index + 1,
                 season: 1, 
-                
                 title: finalTitle,
-                name: finalTitle, // Doublon sécurité
-                
+                name: finalTitle,
                 image: imgUrl,
-                thumbnail: imgUrl, // Doublon sécurité
-                
-                // C'est ici que ça bloquait : on envoie du texte maintenant
+                thumbnail: imgUrl,
                 duration: durationStr, 
-                
                 description: `${finalTitle}\n${dateStr}`
             };
         });
@@ -181,20 +174,22 @@ async function extractStreamUrl(vodId) {
         const tokenData = tokenJson.data?.videoPlaybackAccessToken;
 
         if (tokenData) {
-            const officialUrl = `https://usher.ttvnw.net/vod/${vodId}.m3u8?nauth=${tokenData.value}&nauthsig=${tokenData.signature}&allow_source=true&player_backend=mediaplayer`;
+            // --- CORRECTION CRITIQUE ICI ---
+            // Il faut absolument encoder le token et la signature (encodeURIComponent)
+            // sinon l'URL est invalide car le token contient des guillemets et accolades.
+            const safeToken = encodeURIComponent(tokenData.value);
+            const safeSig = encodeURIComponent(tokenData.signature);
+
+            const officialUrl = `https://usher.ttvnw.net/vod/${vodId}.m3u8?nauth=${safeToken}&nauthsig=${safeSig}&allow_source=true&player_backend=mediaplayer`;
             
-            // Check rapide
-            const check = await soraFetch(officialUrl);
-            if (check && check.status === 200) {
-                streams.push({
-                    title: "Source (Officiel)",
-                    streamUrl: officialUrl,
-                    headers: { "Referer": "https://www.twitch.tv/" }
-                });
-            }
+            streams.push({
+                title: "Source (Officiel)",
+                streamUrl: officialUrl,
+                headers: { "Referer": "https://www.twitch.tv/" }
+            });
         }
 
-        // METHODE B : Hack Storyboard
+        // METHODE B : Hack Storyboard (Fallback)
         if (streams.length === 0) {
             const storyboardQuery = {
                 query: `query { video(id: "${vodId}") { seekPreviewsURL } }`
@@ -215,10 +210,11 @@ async function extractStreamUrl(vodId) {
                 if (sbIndex > 0) {
                     const domain = urlParts[2];
                     const specialHash = urlParts[sbIndex - 1];
+                    // Modification légère : pointer vers l'index racine parfois plus stable
                     const hackedUrl = `https://${domain}/${specialHash}/chunked/index-dvr.m3u8`;
                     
                     streams.push({
-                        title: "Source (NoSub Bypass)",
+                        title: "Source (Backup)",
                         streamUrl: hackedUrl,
                         headers: { "Referer": "https://www.twitch.tv/" }
                     });
