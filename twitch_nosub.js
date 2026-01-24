@@ -9,8 +9,15 @@ const HEADERS = {
     'Content-Type': 'application/json'
 };
 
-// Image générique pour toutes les vidéos (Logo Twitch)
-const GENERIC_IMAGE = "https://pngimg.com/uploads/twitch/twitch_PNG13.png";
+// --- FONCTION DE SÉCURITÉ (CRITIQUE) ---
+// Cette fonction nettoie les titres pour qu'ils soient lisibles mais sans faire planter l'app
+function safeText(str) {
+    if (!str) return "";
+    // 1. Remplace les guillemets " par ' (évite de casser le JSON)
+    // 2. Remplace les sauts de ligne par des espaces
+    // 3. Garde les accents et la ponctuation normale
+    return str.replace(/"/g, "'").replace(/[\r\n]+/g, " ").trim();
+}
 
 async function searchResults(keyword) {
     try {
@@ -32,43 +39,61 @@ async function searchResults(keyword) {
 }
 
 async function extractDetails(login) {
-    // On ne récupère plus la description dynamique pour éviter les bugs
-    return JSON.stringify([{
-        description: 'Chaine Twitch',
-        aliases: 'Twitch',
-        airdate: 'Inconnu'
-    }]);
+    try {
+        const query = { query: `query { user(login: "${login}") { description createdAt } }` };
+        const responseText = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(query) });
+        const json = await responseText.json();
+        const user = json.data?.user;
+        
+        // On récupère la vraie description mais on la nettoie
+        const desc = safeText(user?.description || 'Chaine Twitch');
+
+        return JSON.stringify([{
+            description: desc,
+            aliases: 'Twitch',
+            airdate: user?.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'Inconnu'
+        }]);
+    } catch (error) { return JSON.stringify([{ description: 'Info indisponible', aliases: '', airdate: '' }]); }
 }
 
 async function extractEpisodes(login) {
     try {
         const episodes = [];
 
-        // --- LIVE ---
+        // --- 1. LIVE (En Direct) ---
         try {
-            const queryLive = { query: `query { user(login: "${login}") { stream { id } } }` };
+            const queryLive = { query: `query { user(login: "${login}") { stream { id title game { name } previewImage { url } } } }` };
             const respLive = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(queryLive) });
             const jsonLive = await respLive.json();
-            
-            if (jsonLive.data?.user?.stream) {
+            const currentStream = jsonLive.data?.user?.stream;
+
+            if (currentStream) {
+                const gameName = safeText(currentStream.game?.name || "Jeu");
+                const liveTitle = safeText(currentStream.title || "Live en cours");
+                
+                // Image du Live (HD)
+                let liveImg = "https://pngimg.com/uploads/twitch/twitch_PNG13.png";
+                if (currentStream.previewImage?.url) {
+                    liveImg = currentStream.previewImage.url.replace("{width}", "1280").replace("{height}", "720");
+                }
+
                 episodes.push({
                     href: "LIVE_" + login,
                     number: 0,
                     season: 1,
-                    title: "LIVE EN COURS",
-                    name: "LIVE EN COURS",
-                    image: GENERIC_IMAGE,
-                    thumbnail: GENERIC_IMAGE,
+                    title: "🔴 LIVE : " + liveTitle,
+                    name: "🔴 LIVE : " + liveTitle,
+                    image: liveImg,
+                    thumbnail: liveImg,
                     duration: "LIVE",
-                    description: "Diffusion en direct"
+                    description: `Jeu : ${gameName}\n${liveTitle}`
                 });
             }
         } catch (e) {}
 
-        // --- VODS ---
+        // --- 2. VODS (Rediffusions avec Vrais Titres) ---
         try {
-            // On ne demande plus les titres ni les images à Twitch, juste l'ID et la Date
-            const queryVideos = { query: `query { user(login: "${login}") { videos(first: 20) { edges { node { id, publishedAt, lengthSeconds } } } } }` };
+            const queryVideos = { query: `query { user(login: "${login}") { videos(first: 20) { edges { node { id, title, publishedAt, lengthSeconds, previewThumbnailURL(height: 360, width: 640) } } } } }` };
             const respVideos = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(queryVideos) });
             const jsonVideos = await respVideos.json();
             const edges = jsonVideos.data?.user?.videos?.edges || [];
@@ -76,25 +101,38 @@ async function extractEpisodes(login) {
             edges.forEach((edge, index) => {
                 const video = edge.node;
                 
+                // DATE
                 let dateStr = "Inconnu";
                 if (video.publishedAt) {
                     let d = new Date(video.publishedAt);
                     dateStr = d.toLocaleDateString(); 
                 }
 
-                const simpleTitle = `VOD du ${dateStr}`;
+                // TITRE (C'est ici qu'on récupère le VRAI titre)
+                // On utilise safeText() pour éviter les bugs mais garder le texte
+                let realTitle = safeText(video.title);
+                if (!realTitle) { realTitle = `VOD du ${dateStr}`; }
+
+                // IMAGE (Vraie miniature en HD)
+                let imgUrl = video.previewThumbnailURL;
+                if (!imgUrl || imgUrl.includes("404_preview")) {
+                    imgUrl = "https://vod-secure.twitch.tv/_404/404_preview-640x360.jpg";
+                } else {
+                    imgUrl = imgUrl.replace("{width}", "1280").replace("{height}", "720");
+                }
+
                 const minutes = Math.floor(video.lengthSeconds / 60);
 
                 episodes.push({
                     href: video.id,
                     number: index + 1,
                     season: 1,
-                    title: simpleTitle,
-                    name: simpleTitle,
-                    image: GENERIC_IMAGE, // Image fixe forcée
-                    thumbnail: GENERIC_IMAGE,
+                    title: realTitle,      // Le titre s'affichera ici
+                    name: realTitle,       // Et ici
+                    image: imgUrl,         // La miniature s'affichera ici
+                    thumbnail: imgUrl,
                     duration: `${minutes} min`,
-                    description: "Rediffusion Twitch"
+                    description: `${realTitle}\nDiffusé le : ${dateStr}`
                 });
             });
         } catch (e) {}
@@ -114,6 +152,7 @@ async function extractStreamUrl(vodId) {
         else realVodId = vodId;
 
         if (isLive) {
+            // Live -> Méthode Officielle
             try {
                 const tokenQuery = {
                     operationName: "PlaybackAccessToken_Template",
@@ -134,7 +173,7 @@ async function extractStreamUrl(vodId) {
                 }
             } catch (e) {}
         } else {
-            // Lecture NoSub Uniquement
+            // VOD -> Méthode NoSub
             try {
                 const storyboardQuery = { query: `query { video(id: "${realVodId}") { seekPreviewsURL } }` };
                 const sbResp = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(storyboardQuery) });
@@ -144,7 +183,7 @@ async function extractStreamUrl(vodId) {
                     const urlParts = seekPreviewsURL.split('/storyboards/');
                     if (urlParts.length > 0) {
                         streams.push({
-                            title: "Lecture Directe (NoSub)",
+                            title: "Lecture VOD (NoSub)",
                             streamUrl: `${urlParts[0]}/chunked/index-dvr.m3u8`,
                             headers: { "Referer": "https://www.twitch.tv/" }
                         });
