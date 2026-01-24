@@ -9,6 +9,15 @@ const HEADERS = {
     'Content-Type': 'application/json'
 };
 
+// --- FONCTION DE NETTOYAGE (CRITIQUE POUR EVITER LE JSON ERROR) ---
+function cleanText(str) {
+    if (!str) return "";
+    // 1. Remplace les guillemets doubles par des simples
+    // 2. Enlève les retours à la ligne
+    // 3. Enlève les barres obliques inverses
+    return str.replace(/"/g, "'").replace(/\n/g, " ").replace(/\\/g, "").trim();
+}
+
 // --- 1. RECHERCHE ---
 async function searchResults(keyword) {
     try {
@@ -58,14 +67,10 @@ async function extractDetails(login) {
         const json = await responseText.json();
         const user = json.data?.user;
 
-        // Nettoyage de la description pour éviter de casser le JSON
-        let desc = "Chaîne Twitch";
-        if (user && user.description) {
-            desc = user.description.replace(/"/g, "'").replace(/\n/g, " ");
-        }
+        const safeDesc = cleanText(user?.description || 'Chaine Twitch');
 
         const results = [{
-            description: desc,
+            description: safeDesc,
             aliases: 'Twitch',
             airdate: user?.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'Inconnu'
         }];
@@ -75,7 +80,7 @@ async function extractDetails(login) {
     }
 }
 
-// --- 3. ÉPISODES (CORRECTION TITRES ET IMAGES) ---
+// --- 3. ÉPISODES (TITRES ET IMAGES SÉCURISÉS) ---
 async function extractEpisodes(login) {
     try {
         const episodes = [];
@@ -90,11 +95,9 @@ async function extractEpisodes(login) {
             const currentStream = jsonLive.data?.user?.stream;
 
             if (currentStream) {
-                // Nettoyage Titre Live
-                let liveTitle = currentStream.title || "Live en cours";
-                liveTitle = liveTitle.replace(/"/g, "''").replace(/\n/g, " ").trim();
-
-                // Image Live HD
+                const gameName = cleanText(currentStream.game?.name || "Jeu inconnu");
+                const liveTitle = cleanText(currentStream.title || "Live en cours");
+                
                 let liveImg = "https://pngimg.com/uploads/twitch/twitch_PNG13.png";
                 if (currentStream.previewImage?.url) {
                     liveImg = currentStream.previewImage.url.replace("{width}", "1280").replace("{height}", "720");
@@ -109,7 +112,7 @@ async function extractEpisodes(login) {
                     image: liveImg,
                     thumbnail: liveImg,
                     duration: "LIVE",
-                    description: `Actuellement en direct sur : ${currentStream.game?.name || "Jeu inconnu"}`
+                    description: `Actuellement en direct sur : ${gameName}\n${liveTitle}`
                 });
             }
         } catch (e) { console.log("Live Error: " + e); }
@@ -136,26 +139,22 @@ async function extractEpisodes(login) {
             edges.forEach((edge, index) => {
                 const video = edge.node;
                 
-                // 1. DATE
+                // Date
                 let dateStr = video.publishedAt ? new Date(video.publishedAt).toLocaleDateString() : "Inconnu";
 
-                // 2. NETTOYAGE DU TITRE (CRITIQUE)
-                // Si le titre contient des guillemets doubles ", cela coupe la chaîne JSON et provoque l'erreur "JSON parsing error"
-                let safeTitle = video.title;
-                if (!safeTitle || safeTitle.trim().length === 0) {
-                    safeTitle = `Rediffusion du ${dateStr}`;
+                // Titre & Description (Nettoyage)
+                let rawTitle = video.title;
+                if (!rawTitle || rawTitle.trim() === "") {
+                    rawTitle = `VOD du ${dateStr}`;
                 }
-                // On remplace " par ' et on enlève les sauts de ligne
-                safeTitle = safeTitle.replace(/"/g, "'").replace(/\n/g, " ").replace(/\\/g, "").trim();
-
-                // 3. NETTOYAGE DE L'IMAGE
-                // On remplace les placeholders {width} et {height} par de la HD
+                const safeTitle = cleanText(rawTitle);
+                
+                // Image (HD)
                 let imgUrl = video.previewThumbnailURL;
-                if (imgUrl && !imgUrl.includes("404_preview")) {
-                    imgUrl = imgUrl.replace("{width}", "1280").replace("{height}", "720");
-                } else {
-                    // Image par défaut si pas de miniature
+                if (!imgUrl || imgUrl.includes("404_preview")) {
                     imgUrl = "https://vod-secure.twitch.tv/_404/404_preview-640x360.jpg";
+                } else {
+                    imgUrl = imgUrl.replace("{width}", "1280").replace("{height}", "720");
                 }
 
                 const minutes = Math.floor(video.lengthSeconds / 60);
@@ -164,10 +163,10 @@ async function extractEpisodes(login) {
                     href: video.id,
                     number: index + 1,
                     season: 1, 
-                    title: safeTitle,     // Titre sécurisé
-                    name: safeTitle,      // Nom sécurisé
-                    image: imgUrl,        // Image HD valide
-                    thumbnail: imgUrl,    // Image HD valide
+                    title: safeTitle,
+                    name: safeTitle,
+                    image: imgUrl,
+                    thumbnail: imgUrl,
                     duration: `${minutes} min`, 
                     description: `${safeTitle}\n${dateStr} - ${minutes} mins`
                 });
@@ -180,7 +179,7 @@ async function extractEpisodes(login) {
     }
 }
 
-// --- 4. STREAM (HYBRIDE : VOD NOSUB / LIVE OFFICIEL) ---
+// --- 4. STREAM (LECTURE) ---
 async function extractStreamUrl(vodId) {
     try {
         let streams = [];
@@ -195,7 +194,7 @@ async function extractStreamUrl(vodId) {
             realVodId = vodId;
         }
 
-        // Si c'est un LIVE -> Méthode Officielle
+        // Si LIVE -> Officiel
         if (isLive) {
             try {
                 const tokenQuery = {
@@ -203,7 +202,6 @@ async function extractStreamUrl(vodId) {
                     query: "query PlaybackAccessToken_Template($login: String!, $isLive: Boolean!, $vodID: ID!, $isVod: Boolean!, $playerType: String!) { streamPlaybackAccessToken(channelName: $login, params: {platform: \"web\", playerBackend: \"mediaplayer\", playerType: $playerType}) @include(if: $isLive) { value signature __typename } }",
                     variables: { isLive: true, login: login, isVod: false, vodID: "", playerType: "site" }
                 };
-
                 const tokenResp = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(tokenQuery) });
                 const tokenJson = await tokenResp.json();
                 const tokenData = tokenJson.data?.streamPlaybackAccessToken;
@@ -214,7 +212,7 @@ async function extractStreamUrl(vodId) {
                     const officialUrl = `https://usher.ttvnw.net/api/channel/hls/${login}.m3u8?token=${safeToken}&sig=${safeSig}&allow_source=true&player_backend=mediaplayer`;
                     
                     streams.push({
-                        title: "Source (Live)",
+                        title: "Live (Officiel)",
                         streamUrl: officialUrl,
                         headers: { "Referer": "https://www.twitch.tv/" }
                     });
@@ -222,29 +220,49 @@ async function extractStreamUrl(vodId) {
             } catch(e) {}
         } 
         
-        // Si c'est une VOD -> Méthode NoSub (Directement)
+        // Si VOD -> NoSub (Priorité) + Officiel (Secondaire)
         else {
+            // Option A: NoSub (Hack)
             try {
-                const storyboardQuery = {
-                    query: `query { video(id: "${realVodId}") { seekPreviewsURL } }`
-                };
+                const storyboardQuery = { query: `query { video(id: "${realVodId}") { seekPreviewsURL } }` };
                 const sbResp = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(storyboardQuery) });
                 const sbJson = await sbResp.json();
                 const seekPreviewsURL = sbJson.data?.video?.seekPreviewsURL;
 
                 if (seekPreviewsURL) {
-                    // Extraction URL magique
                     const urlParts = seekPreviewsURL.split('/storyboards/');
                     if (urlParts.length > 0) {
-                        const baseUrl = urlParts[0];
-                        const hackedUrl = `${baseUrl}/chunked/index-dvr.m3u8`;
-                        
+                        const hackedUrl = `${urlParts[0]}/chunked/index-dvr.m3u8`;
                         streams.push({
                             title: "Lecture Directe (NoSub)",
                             streamUrl: hackedUrl,
                             headers: { "Referer": "https://www.twitch.tv/" }
                         });
                     }
+                }
+            } catch(e) {}
+
+            // Option B: Officiel (si besoin)
+            try {
+                const tokenQuery = {
+                    operationName: "PlaybackAccessToken_Template",
+                    query: "query PlaybackAccessToken_Template($login: String!, $isLive: Boolean!, $vodID: ID!, $isVod: Boolean!, $playerType: String!) { videoPlaybackAccessToken(id: $vodID, params: {platform: \"web\", playerBackend: \"mediaplayer\", playerType: $playerType}) @include(if: $isVod) { value signature __typename } }",
+                    variables: { isLive: false, login: "", isVod: true, vodID: realVodId, playerType: "site" }
+                };
+                const tokenResp = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(tokenQuery) });
+                const tokenJson = await tokenResp.json();
+                const tokenData = tokenJson.data?.videoPlaybackAccessToken;
+
+                if (tokenData) {
+                    const safeToken = encodeURIComponent(tokenData.value);
+                    const safeSig = encodeURIComponent(tokenData.signature);
+                    const officialUrl = `https://usher.ttvnw.net/vod/${realVodId}.m3u8?nauth=${safeToken}&nauthsig=${safeSig}&allow_source=true&player_backend=mediaplayer`;
+                    
+                    streams.push({
+                        title: "Source Officielle (Qualité Max)",
+                        streamUrl: officialUrl,
+                        headers: { "Referer": "https://www.twitch.tv/" }
+                    });
                 }
             } catch(e) {}
         }
