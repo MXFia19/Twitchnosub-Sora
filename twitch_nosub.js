@@ -12,7 +12,6 @@ const HEADERS = {
 // --- 1. RECHERCHE ---
 async function searchResults(keyword) {
     try {
-        // CORRECTION : Twitch demande le "login" en minuscule pour trouver la chaîne
         const cleanKeyword = keyword.trim().toLowerCase();
 
         const query = {
@@ -78,7 +77,6 @@ async function extractDetails(login) {
 // --- 3. ÉPISODES (AVEC LIVE) ---
 async function extractEpisodes(login) {
     try {
-        // 1. La requête modifiée pour demander le Stream + les Vidéos
         const query = {
             query: `query {
                 user(login: "${login}") {
@@ -111,14 +109,12 @@ async function extractEpisodes(login) {
         });
         const json = await responseText.json();
         
-        // Récupération des données
         const user = json.data?.user;
         const edges = user?.videos?.edges || [];
-        const currentStream = user?.stream; // Info sur le live actuel
+        const currentStream = user?.stream; 
 
         console.log(`[Twitch] ${edges.length} VODs trouvées pour ${login}`);
 
-        // 2. Traitement des VODs (comme avant)
         const episodes = edges.map((edge, index) => {
             const video = edge.node;
             
@@ -141,7 +137,7 @@ async function extractEpisodes(login) {
 
             return {
                 href: video.id,
-                number: index + 1, // On décale si live ? non, on laisse
+                number: index + 1,
                 season: 1, 
                 title: finalTitle,
                 name: finalTitle,
@@ -152,7 +148,6 @@ async function extractEpisodes(login) {
             };
         });
 
-        // 3. Ajout du LIVE en premier si disponible
         if (currentStream) {
             const gameName = currentStream.game?.name || "Jeu inconnu";
             const liveImg = currentStream.previewImage?.url 
@@ -160,18 +155,17 @@ async function extractEpisodes(login) {
                 : "https://pngimg.com/uploads/twitch/twitch_PNG13.png";
 
             const liveEpisode = {
-                href: "LIVE_" + login, // Identifiant spécial pour le live
-                number: 0, // Numéro 0 pour le mettre tout en haut
+                href: "LIVE_" + login, 
+                number: 0, 
                 season: 1,
-                title: "EN DIRECT : " + currentStream.title,
-                name: "EN DIRECT : " + currentStream.title,
+                title: "🔴 EN DIRECT : " + currentStream.title,
+                name: "🔴 EN DIRECT : " + currentStream.title,
                 image: liveImg,
                 thumbnail: liveImg,
                 duration: "LIVE",
                 description: `Actuellement en direct sur : ${gameName}\n${currentStream.title}`
             };
 
-            // On ajoute le live au tout début de la liste
             episodes.unshift(liveEpisode);
         }
 
@@ -182,37 +176,30 @@ async function extractEpisodes(login) {
     }
 }
 
-
 // --- 4. STREAM (COMPATIBLE LIVE & VOD) ---
 async function extractStreamUrl(vodId) {
     try {
         let streams = [];
         
-        // DÉTECTION : Est-ce un Live ou une VOD ?
-        // On regarde si l'ID commence par "LIVE_" (format défini dans extractEpisodes)
         const isLive = vodId.toString().startsWith("LIVE_");
         
-        // Préparation des variables
         let login = "";
         let realVodId = vodId;
 
         if (isLive) {
-            // On retire le préfixe "LIVE_" pour récupérer le pseudo du streamer
             login = vodId.replace("LIVE_", "");
         } else {
-            // C'est une VOD, l'ID est déjà bon
             realVodId = vodId;
         }
 
-        // --- METHODE A : Token Officiel (GQL) ---
         const tokenQuery = {
             operationName: "PlaybackAccessToken_Template",
             query: "query PlaybackAccessToken_Template($login: String!, $isLive: Boolean!, $vodID: ID!, $isVod: Boolean!, $playerType: String!) { streamPlaybackAccessToken(channelName: $login, params: {platform: \"web\", playerBackend: \"mediaplayer\", playerType: $playerType}) @include(if: $isLive) { value signature __typename } videoPlaybackAccessToken(id: $vodID, params: {platform: \"web\", playerBackend: \"mediaplayer\", playerType: $playerType}) @include(if: $isVod) { value signature __typename } }",
             variables: { 
                 isLive: isLive, 
-                login: isLive ? login : "", // Le login n'est nécessaire que pour le Live
+                login: isLive ? login : "", 
                 isVod: !isLive, 
-                vodID: isLive ? "" : realVodId, // L'ID n'est nécessaire que pour la VOD
+                vodID: isLive ? "" : realVodId, 
                 playerType: "site" 
             }
         };
@@ -224,7 +211,6 @@ async function extractStreamUrl(vodId) {
         });
         const tokenJson = await tokenResp.json();
         
-        // On récupère le bon token selon le mode
         let tokenData;
         if (isLive) {
             tokenData = tokenJson.data?.streamPlaybackAccessToken;
@@ -239,10 +225,8 @@ async function extractStreamUrl(vodId) {
             let officialUrl = "";
             
             if (isLive) {
-                // URL pour le DIRECT
                 officialUrl = `https://usher.ttvnw.net/api/channel/hls/${login}.m3u8?token=${safeToken}&sig=${safeSig}&allow_source=true&player_backend=mediaplayer`;
             } else {
-                // URL pour la VOD
                 officialUrl = `https://usher.ttvnw.net/vod/${realVodId}.m3u8?nauth=${safeToken}&nauthsig=${safeSig}&allow_source=true&player_backend=mediaplayer`;
             }
             
@@ -253,8 +237,6 @@ async function extractStreamUrl(vodId) {
             });
         }
 
-        // --- METHODE B : Hack Storyboard (Seulement pour les VODs) ---
-        // Le storyboard n'existe pas pour le direct, donc on ne le fait que si !isLive
         if (streams.length === 0 && !isLive) {
             const storyboardQuery = {
                 query: `query { video(id: "${realVodId}") { seekPreviewsURL } }`
@@ -295,14 +277,6 @@ async function extractStreamUrl(vodId) {
 
     } catch (error) {
         console.log('Stream Error: ' + error);
-        return JSON.stringify({ streams: [], subtitles: [] });
-    }
-}
-
-
-        return JSON.stringify(results);
-
-    } catch (error) {
         return JSON.stringify({ streams: [], subtitles: [] });
     }
 }
