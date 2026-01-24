@@ -98,8 +98,8 @@ async function extractEpisodes(login) {
                     href: "LIVE_" + login, 
                     number: 0, 
                     season: 1,
-                    title: "EN DIRECT : " + currentStream.title,
-                    name: "EN DIRECT : " + currentStream.title,
+                    title: "🔴 EN DIRECT : " + currentStream.title,
+                    name: "🔴 EN DIRECT : " + currentStream.title,
                     image: liveImg,
                     thumbnail: liveImg,
                     duration: "LIVE",
@@ -183,69 +183,46 @@ async function extractEpisodes(login) {
     }
 }
 
-// --- 4. STREAM (ACTIVATION FORCEE DU BACKUP) ---
+// --- 4. STREAM (DIRECT NoSub pour VOD / OFFICIEL pour LIVE) ---
 async function extractStreamUrl(vodId) {
     try {
         let streams = [];
         const isLive = vodId.toString().startsWith("LIVE_");
         
-        let login = "";
-        let realVodId = vodId;
-
+        // CAS 1 : LIVE (On est obligé d'utiliser la méthode officielle)
         if (isLive) {
-            login = vodId.replace("LIVE_", "");
-        } else {
-            realVodId = vodId;
-        }
-
-        // --- METHODE A : Token Officiel (Par défaut) ---
-        const tokenQuery = {
-            operationName: "PlaybackAccessToken_Template",
-            query: "query PlaybackAccessToken_Template($login: String!, $isLive: Boolean!, $vodID: ID!, $isVod: Boolean!, $playerType: String!) { streamPlaybackAccessToken(channelName: $login, params: {platform: \"web\", playerBackend: \"mediaplayer\", playerType: $playerType}) @include(if: $isLive) { value signature __typename } videoPlaybackAccessToken(id: $vodID, params: {platform: \"web\", playerBackend: \"mediaplayer\", playerType: $playerType}) @include(if: $isVod) { value signature __typename } }",
-            variables: { 
-                isLive: isLive, 
-                login: isLive ? login : "", 
-                isVod: !isLive, 
-                vodID: isLive ? "" : realVodId, 
-                playerType: "site" 
-            }
-        };
-
-        const tokenResp = await soraFetch(GQL_URL, {
-            method: 'POST',
-            headers: HEADERS,
-            body: JSON.stringify(tokenQuery)
-        });
-        const tokenJson = await tokenResp.json();
-        
-        let tokenData;
-        if (isLive) {
-            tokenData = tokenJson.data?.streamPlaybackAccessToken;
-        } else {
-            tokenData = tokenJson.data?.videoPlaybackAccessToken;
-        }
-
-        if (tokenData) {
-            const safeToken = encodeURIComponent(tokenData.value);
-            const safeSig = encodeURIComponent(tokenData.signature);
-            let officialUrl = "";
+            const login = vodId.replace("LIVE_", "");
             
-            if (isLive) {
-                officialUrl = `https://usher.ttvnw.net/api/channel/hls/${login}.m3u8?token=${safeToken}&sig=${safeSig}&allow_source=true&player_backend=mediaplayer`;
-            } else {
-                officialUrl = `https://usher.ttvnw.net/vod/${realVodId}.m3u8?nauth=${safeToken}&nauthsig=${safeSig}&allow_source=true&player_backend=mediaplayer`;
-            }
-            
-            streams.push({
-                title: isLive ? "Source (Live)" : "Source 1 (Officiel)",
-                streamUrl: officialUrl,
-                headers: { "Referer": "https://www.twitch.tv/" }
+            const tokenQuery = {
+                operationName: "PlaybackAccessToken_Template",
+                query: "query PlaybackAccessToken_Template($login: String!, $isLive: Boolean!, $vodID: ID!, $isVod: Boolean!, $playerType: String!) { streamPlaybackAccessToken(channelName: $login, params: {platform: \"web\", playerBackend: \"mediaplayer\", playerType: $playerType}) @include(if: $isLive) { value signature __typename } }",
+                variables: { isLive: true, login: login, isVod: false, vodID: "", playerType: "site" }
+            };
+
+            const tokenResp = await soraFetch(GQL_URL, {
+                method: 'POST',
+                headers: HEADERS,
+                body: JSON.stringify(tokenQuery)
             });
-        }
+            const tokenJson = await tokenResp.json();
+            const tokenData = tokenJson.data?.streamPlaybackAccessToken;
 
-        // --- METHODE B : Hack Storyboard (NoSub) ---
-        // On force cette méthode pour les VODs, même si l'officielle a été trouvée
-        if (!isLive) {
+            if (tokenData) {
+                const safeToken = encodeURIComponent(tokenData.value);
+                const safeSig = encodeURIComponent(tokenData.signature);
+                const officialUrl = `https://usher.ttvnw.net/api/channel/hls/${login}.m3u8?token=${safeToken}&sig=${safeSig}&allow_source=true&player_backend=mediaplayer`;
+                
+                streams.push({
+                    title: "Source (Live)",
+                    streamUrl: officialUrl,
+                    headers: { "Referer": "https://www.twitch.tv/" }
+                });
+            }
+        } 
+        
+        // CAS 2 : VOD (On utilise UNIQUEMENT le hack NoSub)
+        else {
+            const realVodId = vodId;
             const storyboardQuery = {
                 query: `query { video(id: "${realVodId}") { seekPreviewsURL } }`
             };
@@ -265,11 +242,11 @@ async function extractStreamUrl(vodId) {
                 if (sbIndex > 0) {
                     const domain = urlParts[2];
                     const specialHash = urlParts[sbIndex - 1];
-                    // URL Magique qui contourne les pubs et le sub-only
+                    // URL directe NoSub
                     const hackedUrl = `https://${domain}/${specialHash}/chunked/index-dvr.m3u8`;
                     
                     streams.push({
-                        title: "Source 2 (NoSub/Backup)",
+                        title: "Source (NoSub)",
                         streamUrl: hackedUrl,
                         headers: { "Referer": "https://www.twitch.tv/" }
                     });
