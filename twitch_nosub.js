@@ -74,113 +74,117 @@ async function extractDetails(login) {
     }
 }
 
-// --- 3. ÉPISODES (AVEC LIVE) ---
+// --- 3. ÉPISODES (V3 - SÉPARÉE & ROBUSTE) ---
 async function extractEpisodes(login) {
     try {
-        const query = {
-            query: `query {
-                user(login: "${login}") {
-                    stream {
-                        id
-                        title
-                        game { name }
-                        previewImage { url }
-                    }
-                    videos(first: 20, type: ARCHIVE, sort: TIME) {
-                        edges {
-                            node {
-                                id
-                                title
-                                publishedAt
-                                lengthSeconds
-                                previewThumbnailURL(height: 360, width: 640)
-                                viewCount
+        const episodes = [];
+
+        // ÉTAPE A : Récupérer le LIVE (Requête dédiée)
+        try {
+            const queryLive = {
+                query: `query { user(login: "${login}") { stream { id title game { name } previewImage { url } } } }`
+            };
+            const respLive = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(queryLive) });
+            const jsonLive = await respLive.json();
+            const currentStream = jsonLive.data?.user?.stream;
+
+            if (currentStream) {
+                const gameName = currentStream.game?.name || "Jeu inconnu";
+                const liveImg = currentStream.previewImage?.url 
+                    ? currentStream.previewImage.url.replace("{width}", "640").replace("{height}", "360")
+                    : "https://pngimg.com/uploads/twitch/twitch_PNG13.png";
+
+                episodes.push({
+                    href: "LIVE_" + login, 
+                    number: 0, 
+                    season: 1,
+                    title: " EN DIRECT : " + currentStream.title,
+                    name: " EN DIRECT : " + currentStream.title,
+                    image: liveImg,
+                    thumbnail: liveImg,
+                    duration: "LIVE",
+                    description: `Actuellement en direct sur : ${gameName}\n${currentStream.title}`
+                });
+            }
+        } catch (e) {
+            console.log("[Twitch] Erreur Live: " + e);
+        }
+
+        // ÉTAPE B : Récupérer les VODs (Requête simplifiée sans filtres complexes)
+        try {
+            // Note : J'ai retiré 'type: ARCHIVE' pour récupérer aussi les Uploads et Highlights
+            const queryVideos = {
+                query: `query {
+                    user(login: "${login}") {
+                        videos(first: 20) {
+                            edges {
+                                node {
+                                    id
+                                    title
+                                    publishedAt
+                                    lengthSeconds
+                                    previewThumbnailURL(height: 360, width: 640)
+                                }
                             }
                         }
                     }
+                }`
+            };
+
+            const respVideos = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(queryVideos) });
+            const jsonVideos = await respVideos.json();
+            const edges = jsonVideos.data?.user?.videos?.edges || [];
+
+            console.log(`[Twitch] ${edges.length} VODs trouvées pour ${login}`);
+
+            edges.forEach((edge, index) => {
+                const video = edge.node;
+                
+                let dateStr = "Inconnu";
+                if (video.publishedAt) {
+                    dateStr = new Date(video.publishedAt).toLocaleDateString();
                 }
-            }`
-        };
 
-        const responseText = await soraFetch(GQL_URL, {
-            method: 'POST',
-            headers: HEADERS,
-            body: JSON.stringify(query)
-        });
-        const json = await responseText.json();
-        
-        const user = json.data?.user;
-        const edges = user?.videos?.edges || [];
-        const currentStream = user?.stream; 
+                let finalTitle = video.title || `VOD du ${dateStr}`;
+                finalTitle = finalTitle.replace(/"/g, "'");
 
-        console.log(`[Twitch] ${edges.length} VODs trouvées pour ${login}`);
+                let imgUrl = video.previewThumbnailURL;
+                if (!imgUrl || imgUrl.includes("404_preview")) {
+                    imgUrl = "https://pngimg.com/uploads/twitch/twitch_PNG13.png";
+                } else {
+                    imgUrl = imgUrl.replace("{width}", "640").replace("{height}", "360");
+                }
 
-        const episodes = edges.map((edge, index) => {
-            const video = edge.node;
-            
-            let dateStr = "Inconnu";
-            if (video.publishedAt) {
-                dateStr = new Date(video.publishedAt).toLocaleDateString();
-            }
+                const minutes = Math.floor(video.lengthSeconds / 60);
 
-            let finalTitle = video.title || `VOD du ${dateStr}`;
-            finalTitle = finalTitle.replace(/"/g, "'");
+                episodes.push({
+                    href: video.id,
+                    number: index + 1,
+                    season: 1, 
+                    title: finalTitle,
+                    name: finalTitle,
+                    image: imgUrl,
+                    thumbnail: imgUrl,
+                    duration: `${minutes} min`, 
+                    description: `${finalTitle}\n${dateStr}`
+                });
+            });
 
-            let imgUrl = video.previewThumbnailURL;
-            if (!imgUrl || imgUrl.includes("404_preview")) {
-                imgUrl = "https://pngimg.com/uploads/twitch/twitch_PNG13.png";
-            } else {
-                imgUrl = imgUrl.replace("{width}", "640").replace("{height}", "360");
-            }
-
-            const minutes = Math.floor(video.lengthSeconds / 60);
-
-            return {
-                href: video.id,
-                number: index + 1,
-                season: 1, 
-                title: finalTitle,
-                name: finalTitle,
-                image: imgUrl,
-                thumbnail: imgUrl,
-                duration: `${minutes} min`, 
-                description: `${finalTitle}\n${dateStr}`
-            };
-        });
-
-        if (currentStream) {
-            const gameName = currentStream.game?.name || "Jeu inconnu";
-            const liveImg = currentStream.previewImage?.url 
-                ? currentStream.previewImage.url.replace("{width}", "640").replace("{height}", "360")
-                : "https://pngimg.com/uploads/twitch/twitch_PNG13.png";
-
-            const liveEpisode = {
-                href: "LIVE_" + login, 
-                number: 0, 
-                season: 1,
-                title: "🔴 EN DIRECT : " + currentStream.title,
-                name: "🔴 EN DIRECT : " + currentStream.title,
-                image: liveImg,
-                thumbnail: liveImg,
-                duration: "LIVE",
-                description: `Actuellement en direct sur : ${gameName}\n${currentStream.title}`
-            };
-
-            episodes.unshift(liveEpisode);
+        } catch (e) {
+            console.log("[Twitch] Erreur Videos: " + e);
         }
 
         return JSON.stringify(episodes);
     } catch (error) {
-        console.log('Episodes error: ' + error);
+        console.log('Global Episodes error: ' + error);
         return JSON.stringify([]);
     }
 }
 
-// --- 4. STREAM (COMPATIBLE LIVE & VOD) ---
+// --- 4. STREAM ---
 async function extractStreamUrl(vodId) {
     try {
         let streams = [];
-        
         const isLive = vodId.toString().startsWith("LIVE_");
         
         let login = "";
@@ -221,7 +225,6 @@ async function extractStreamUrl(vodId) {
         if (tokenData) {
             const safeToken = encodeURIComponent(tokenData.value);
             const safeSig = encodeURIComponent(tokenData.signature);
-
             let officialUrl = "";
             
             if (isLive) {
@@ -258,7 +261,6 @@ async function extractStreamUrl(vodId) {
                     const domain = urlParts[2];
                     const specialHash = urlParts[sbIndex - 1];
                     const hackedUrl = `https://${domain}/${specialHash}/chunked/index-dvr.m3u8`;
-                    
                     streams.push({
                         title: "Source (Backup)",
                         streamUrl: hackedUrl,
@@ -268,12 +270,7 @@ async function extractStreamUrl(vodId) {
             }
         }
 
-        const results = {
-            streams: streams,
-            subtitles: []
-        };
-
-        return JSON.stringify(results);
+        return JSON.stringify({ streams: streams, subtitles: [] });
 
     } catch (error) {
         console.log('Stream Error: ' + error);
