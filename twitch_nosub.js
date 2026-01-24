@@ -9,11 +9,8 @@ const HEADERS = {
     'Content-Type': 'application/json'
 };
 
-// Fonction de nettoyage (Garde lettres, chiffres, accents et ponctuation simple)
-function safeString(str) {
-    if (!str) return "";
-    return str.replace(/[^a-zA-Z0-9àâçéèêëîïôûùüÿñæœ .,!?'\-:()]/g, "").trim();
-}
+// Image générique pour toutes les vidéos (Logo Twitch)
+const GENERIC_IMAGE = "https://pngimg.com/uploads/twitch/twitch_PNG13.png";
 
 async function searchResults(keyword) {
     try {
@@ -35,20 +32,12 @@ async function searchResults(keyword) {
 }
 
 async function extractDetails(login) {
-    try {
-        const query = { query: `query { user(login: "${login}") { description createdAt } }` };
-        const responseText = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(query) });
-        const json = await responseText.json();
-        const user = json.data?.user;
-        
-        const safeDesc = safeString(user?.description || 'Chaine Twitch');
-
-        return JSON.stringify([{
-            description: safeDesc,
-            aliases: 'Twitch',
-            airdate: user?.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'Inconnu'
-        }]);
-    } catch (error) { return JSON.stringify([{ description: 'Info indisponible', aliases: '', airdate: '' }]); }
+    // On ne récupère plus la description dynamique pour éviter les bugs
+    return JSON.stringify([{
+        description: 'Chaine Twitch',
+        aliases: 'Twitch',
+        airdate: 'Inconnu'
+    }]);
 }
 
 async function extractEpisodes(login) {
@@ -57,37 +46,29 @@ async function extractEpisodes(login) {
 
         // --- LIVE ---
         try {
-            const queryLive = { query: `query { user(login: "${login}") { stream { id title game { name } previewImage { url } } } }` };
+            const queryLive = { query: `query { user(login: "${login}") { stream { id } } }` };
             const respLive = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(queryLive) });
             const jsonLive = await respLive.json();
-            const currentStream = jsonLive.data?.user?.stream;
-
-            if (currentStream) {
-                const safeGame = safeString(currentStream.game?.name || "Jeu inconnu");
-                const safeTitle = safeString(currentStream.title || "Live");
-                
-                let liveImg = "https://pngimg.com/uploads/twitch/twitch_PNG13.png";
-                if (currentStream.previewImage?.url) {
-                    liveImg = currentStream.previewImage.url.replace("{width}", "1280").replace("{height}", "720");
-                }
-
+            
+            if (jsonLive.data?.user?.stream) {
                 episodes.push({
                     href: "LIVE_" + login,
                     number: 0,
                     season: 1,
-                    title: "EN DIRECT : " + safeGame,
-                    name: "EN DIRECT : " + safeGame,
-                    image: liveImg,
-                    thumbnail: liveImg,
+                    title: "LIVE EN COURS",
+                    name: "LIVE EN COURS",
+                    image: GENERIC_IMAGE,
+                    thumbnail: GENERIC_IMAGE,
                     duration: "LIVE",
-                    description: "Titre du live : " + safeTitle
+                    description: "Diffusion en direct"
                 });
             }
         } catch (e) {}
 
         // --- VODS ---
         try {
-            const queryVideos = { query: `query { user(login: "${login}") { videos(first: 20) { edges { node { id, title, publishedAt, lengthSeconds, previewThumbnailURL(height: 360, width: 640) } } } } }` };
+            // On ne demande plus les titres ni les images à Twitch, juste l'ID et la Date
+            const queryVideos = { query: `query { user(login: "${login}") { videos(first: 20) { edges { node { id, publishedAt, lengthSeconds } } } } }` };
             const respVideos = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(queryVideos) });
             const jsonVideos = await respVideos.json();
             const edges = jsonVideos.data?.user?.videos?.edges || [];
@@ -101,28 +82,19 @@ async function extractEpisodes(login) {
                     dateStr = d.toLocaleDateString(); 
                 }
 
-                const realTitle = safeString(video.title || "");
-                const displayTitle = `VOD du ${dateStr}`; 
-
-                let imgUrl = video.previewThumbnailURL;
-                if (!imgUrl || imgUrl.includes("404_preview")) {
-                    imgUrl = "https://vod-secure.twitch.tv/_404/404_preview-640x360.jpg";
-                } else {
-                    imgUrl = imgUrl.replace("{width}", "1280").replace("{height}", "720");
-                }
-
+                const simpleTitle = `VOD du ${dateStr}`;
                 const minutes = Math.floor(video.lengthSeconds / 60);
 
                 episodes.push({
                     href: video.id,
                     number: index + 1,
                     season: 1,
-                    title: displayTitle,
-                    name: displayTitle,
-                    image: imgUrl,
-                    thumbnail: imgUrl,
+                    title: simpleTitle,
+                    name: simpleTitle,
+                    image: GENERIC_IMAGE, // Image fixe forcée
+                    thumbnail: GENERIC_IMAGE,
                     duration: `${minutes} min`,
-                    description: realTitle
+                    description: "Rediffusion Twitch"
                 });
             });
         } catch (e) {}
@@ -162,6 +134,7 @@ async function extractStreamUrl(vodId) {
                 }
             } catch (e) {}
         } else {
+            // Lecture NoSub Uniquement
             try {
                 const storyboardQuery = { query: `query { video(id: "${realVodId}") { seekPreviewsURL } }` };
                 const sbResp = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(storyboardQuery) });
