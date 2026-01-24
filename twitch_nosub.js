@@ -9,17 +9,16 @@ const HEADERS = {
     'Content-Type': 'application/json'
 };
 
-function cleanText(str) {
+// Fonction de nettoyage (Garde lettres, chiffres, accents et ponctuation simple)
+function safeString(str) {
     if (!str) return "";
-    return str.replace(/"/g, "'").replace(/\n/g, " ").replace(/\\/g, "").trim();
+    return str.replace(/[^a-zA-Z0-9àâçéèêëîïôûùüÿñæœ .,!?'\-:()]/g, "").trim();
 }
 
 async function searchResults(keyword) {
     try {
         const cleanKeyword = keyword.trim().toLowerCase();
-        const query = {
-            query: `query { user(login: "${cleanKeyword}") { id, login, displayName, profileImageURL(width: 300) } }`
-        };
+        const query = { query: `query { user(login: "${cleanKeyword}") { id, login, displayName, profileImageURL(width: 300) } }` };
         const responseText = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(query) });
         const json = await responseText.json();
         const user = json.data?.user;
@@ -32,107 +31,104 @@ async function searchResults(keyword) {
             });
         }
         return JSON.stringify(results);
-    } catch (error) {
-        return JSON.stringify([]);
-    }
+    } catch (error) { return JSON.stringify([]); }
 }
 
 async function extractDetails(login) {
     try {
-        const query = {
-            query: `query { user(login: "${login}") { description createdAt } }`
-        };
+        const query = { query: `query { user(login: "${login}") { description createdAt } }` };
         const responseText = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(query) });
         const json = await responseText.json();
         const user = json.data?.user;
-        const safeDesc = cleanText(user?.description || 'Twitch Channel');
+        
+        const safeDesc = safeString(user?.description || 'Chaine Twitch');
 
-        const results = [{
+        return JSON.stringify([{
             description: safeDesc,
             aliases: 'Twitch',
             airdate: user?.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'Inconnu'
-        }];
-        return JSON.stringify(results);
-    } catch (error) {
-        return JSON.stringify([{ description: 'Info indisponible', aliases: '', airdate: '' }]);
-    }
+        }]);
+    } catch (error) { return JSON.stringify([{ description: 'Info indisponible', aliases: '', airdate: '' }]); }
 }
 
 async function extractEpisodes(login) {
     try {
         const episodes = [];
 
+        // --- LIVE ---
         try {
-            const queryLive = {
-                query: `query { user(login: "${login}") { stream { id title game { name } previewImage { url } } } }`
-            };
+            const queryLive = { query: `query { user(login: "${login}") { stream { id title game { name } previewImage { url } } } }` };
             const respLive = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(queryLive) });
             const jsonLive = await respLive.json();
             const currentStream = jsonLive.data?.user?.stream;
 
             if (currentStream) {
-                const gameName = cleanText(currentStream.game?.name || "Jeu inconnu");
-                const liveTitle = cleanText(currentStream.title || "Live en cours");
+                const safeGame = safeString(currentStream.game?.name || "Jeu inconnu");
+                const safeTitle = safeString(currentStream.title || "Live");
+                
                 let liveImg = "https://pngimg.com/uploads/twitch/twitch_PNG13.png";
                 if (currentStream.previewImage?.url) {
                     liveImg = currentStream.previewImage.url.replace("{width}", "1280").replace("{height}", "720");
                 }
+
                 episodes.push({
                     href: "LIVE_" + login,
                     number: 0,
                     season: 1,
-                    title: "🔴 EN DIRECT : " + liveTitle,
-                    name: "🔴 EN DIRECT : " + liveTitle,
+                    title: "EN DIRECT : " + safeGame,
+                    name: "EN DIRECT : " + safeGame,
                     image: liveImg,
                     thumbnail: liveImg,
                     duration: "LIVE",
-                    description: `Actuellement en direct sur : ${gameName}\n${liveTitle}`
+                    description: "Titre du live : " + safeTitle
                 });
             }
         } catch (e) {}
 
+        // --- VODS ---
         try {
-            const queryVideos = {
-                query: `query { user(login: "${login}") { videos(first: 20) { edges { node { id, title, publishedAt, lengthSeconds, previewThumbnailURL(height: 360, width: 640) } } } } }`
-            };
+            const queryVideos = { query: `query { user(login: "${login}") { videos(first: 20) { edges { node { id, title, publishedAt, lengthSeconds, previewThumbnailURL(height: 360, width: 640) } } } } }` };
             const respVideos = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(queryVideos) });
             const jsonVideos = await respVideos.json();
             const edges = jsonVideos.data?.user?.videos?.edges || [];
 
             edges.forEach((edge, index) => {
                 const video = edge.node;
-                let dateStr = video.publishedAt ? new Date(video.publishedAt).toLocaleDateString() : "Inconnu";
-                let rawTitle = video.title;
-                if (!rawTitle || rawTitle.trim() === "") {
-                    rawTitle = `VOD du ${dateStr}`;
+                
+                let dateStr = "Inconnu";
+                if (video.publishedAt) {
+                    let d = new Date(video.publishedAt);
+                    dateStr = d.toLocaleDateString(); 
                 }
-                const safeTitle = cleanText(rawTitle);
+
+                const realTitle = safeString(video.title || "");
+                const displayTitle = `VOD du ${dateStr}`; 
+
                 let imgUrl = video.previewThumbnailURL;
                 if (!imgUrl || imgUrl.includes("404_preview")) {
                     imgUrl = "https://vod-secure.twitch.tv/_404/404_preview-640x360.jpg";
                 } else {
                     imgUrl = imgUrl.replace("{width}", "1280").replace("{height}", "720");
                 }
+
                 const minutes = Math.floor(video.lengthSeconds / 60);
 
                 episodes.push({
                     href: video.id,
                     number: index + 1,
                     season: 1,
-                    title: safeTitle,
-                    name: safeTitle,
+                    title: displayTitle,
+                    name: displayTitle,
                     image: imgUrl,
                     thumbnail: imgUrl,
                     duration: `${minutes} min`,
-                    description: `${safeTitle}\n${dateStr} - ${minutes} mins`
+                    description: realTitle
                 });
             });
         } catch (e) {}
 
         return JSON.stringify(episodes);
-    } catch (error) {
-        return JSON.stringify([]);
-    }
+    } catch (error) { return JSON.stringify([]); }
 }
 
 async function extractStreamUrl(vodId) {
@@ -142,11 +138,8 @@ async function extractStreamUrl(vodId) {
         let login = "";
         let realVodId = vodId;
 
-        if (isLive) {
-            login = vodId.replace("LIVE_", "");
-        } else {
-            realVodId = vodId;
-        }
+        if (isLive) login = vodId.replace("LIVE_", "");
+        else realVodId = vodId;
 
         if (isLive) {
             try {
@@ -158,14 +151,12 @@ async function extractStreamUrl(vodId) {
                 const tokenResp = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(tokenQuery) });
                 const tokenJson = await tokenResp.json();
                 const tokenData = tokenJson.data?.streamPlaybackAccessToken;
-
                 if (tokenData) {
                     const safeToken = encodeURIComponent(tokenData.value);
                     const safeSig = encodeURIComponent(tokenData.signature);
-                    const officialUrl = `https://usher.ttvnw.net/api/channel/hls/${login}.m3u8?token=${safeToken}&sig=${safeSig}&allow_source=true&player_backend=mediaplayer`;
                     streams.push({
                         title: "Live (Officiel)",
-                        streamUrl: officialUrl,
+                        streamUrl: `https://usher.ttvnw.net/api/channel/hls/${login}.m3u8?token=${safeToken}&sig=${safeSig}&allow_source=true&player_backend=mediaplayer`,
                         headers: { "Referer": "https://www.twitch.tv/" }
                     });
                 }
@@ -176,57 +167,25 @@ async function extractStreamUrl(vodId) {
                 const sbResp = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(storyboardQuery) });
                 const sbJson = await sbResp.json();
                 const seekPreviewsURL = sbJson.data?.video?.seekPreviewsURL;
-
                 if (seekPreviewsURL) {
                     const urlParts = seekPreviewsURL.split('/storyboards/');
                     if (urlParts.length > 0) {
-                        const hackedUrl = `${urlParts[0]}/chunked/index-dvr.m3u8`;
                         streams.push({
                             title: "Lecture Directe (NoSub)",
-                            streamUrl: hackedUrl,
+                            streamUrl: `${urlParts[0]}/chunked/index-dvr.m3u8`,
                             headers: { "Referer": "https://www.twitch.tv/" }
                         });
                     }
                 }
             } catch (e) {}
-
-            try {
-                const tokenQuery = {
-                    operationName: "PlaybackAccessToken_Template",
-                    query: "query PlaybackAccessToken_Template($login: String!, $isLive: Boolean!, $vodID: ID!, $isVod: Boolean!, $playerType: String!) { videoPlaybackAccessToken(id: $vodID, params: {platform: \"web\", playerBackend: \"mediaplayer\", playerType: $playerType}) @include(if: $isVod) { value signature __typename } }",
-                    variables: { isLive: false, login: "", isVod: true, vodID: realVodId, playerType: "site" }
-                };
-                const tokenResp = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(tokenQuery) });
-                const tokenJson = await tokenResp.json();
-                const tokenData = tokenJson.data?.videoPlaybackAccessToken;
-
-                if (tokenData) {
-                    const safeToken = encodeURIComponent(tokenData.value);
-                    const safeSig = encodeURIComponent(tokenData.signature);
-                    const officialUrl = `https://usher.ttvnw.net/vod/${realVodId}.m3u8?nauth=${safeToken}&nauthsig=${safeSig}&allow_source=true&player_backend=mediaplayer`;
-                    streams.push({
-                        title: "Source Officielle (Qualité Max)",
-                        streamUrl: officialUrl,
-                        headers: { "Referer": "https://www.twitch.tv/" }
-                    });
-                }
-            } catch (e) {}
         }
-
         return JSON.stringify({ streams: streams, subtitles: [] });
-    } catch (error) {
-        return JSON.stringify({ streams: [], subtitles: [] });
-    }
+    } catch (error) { return JSON.stringify({ streams: [], subtitles: [] }); }
 }
 
 async function soraFetch(url, options = { headers: {}, method: 'GET', body: null, encoding: 'utf-8' }) {
     try {
-        if (typeof fetchv2 !== 'undefined') {
-            return await fetchv2(url, options.headers ?? {}, options.method ?? 'GET', options.body ?? null, true, options.encoding ?? 'utf-8');
-        } else {
-            return await fetch(url, options);
-        }
-    } catch (e) {
-        try { return await fetch(url, options); } catch (error) { return null; }
-    }
+        if (typeof fetchv2 !== 'undefined') return await fetchv2(url, options.headers ?? {}, options.method ?? 'GET', options.body ?? null, true, options.encoding ?? 'utf-8');
+        else return await fetch(url, options);
+    } catch (e) { try { return await fetch(url, options); } catch (error) { return null; } }
 }
