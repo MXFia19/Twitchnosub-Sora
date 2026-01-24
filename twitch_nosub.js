@@ -116,7 +116,7 @@ async function extractEpisodes(login) {
                 // IMAGE (Vraie miniature en HD)
                 let imgUrl = video.previewThumbnailURL;
                 if (!imgUrl || imgUrl.includes("404_preview")) {
-                    imgUrl = "https://vod-secure.twitch.tv/_404/404_preview-640x360.jpg";
+                    imgUrl = "https://pngimg.com/uploads/twitch/twitch_PNG13.png";
                 } else {
                     imgUrl = imgUrl.replace("{width}", "1280").replace("{height}", "720");
                 }
