@@ -1,20 +1,20 @@
 {
-    "sourceName": "Twitch NoSub",
-    "iconUrl": "https://pngimg.com/uploads/twitch/twitch_PNG13.png",
-    "author": {
-        "name": "MXFia19",
-        "icon": "https://pngimg.com/uploads/twitch/twitch_PNG13.png",
-        "url": ""
-    },
-    "version": "1.0.0",
-    "language": "Multi",
-    "streamType": "HLS",
-    "quality": "Source",
-    "baseUrl": "https://twitch.tv/",
-    "searchBaseUrl": "",
-    "scriptUrl": "https://raw.githubusercontent.com/MXFia19/Twitchnosub-Sora/refs/heads/main/twitch_nosub.js",
-    "type": "shows",
-    "downloadSupport": false,
-    "asyncJS": true,
-    "softsub": false
+  "sourceName": "Twitch NoSub",
+  "iconUrl": "https://pngimg.com/uploads/twitch/twitch_PNG13.png",
+  "author": {
+    "name": "MXFia19",
+    "icon": "https://pngimg.com/uploads/twitch/twitch_PNG13.png",
+    "url": ""
+  },
+  "version": "1.0.0",
+  "language": "Multi",
+  "streamType": "HLS",
+  "quality": "Source",
+  "baseUrl": "https://twitch.tv/",
+  "searchBaseUrl": "",
+  "scriptUrl": "https://raw.githubusercontent.com/MXFia19/Twitchnosub-Sora/refs/heads/main/twitch_nosub.js",
+  "type": "shows",
+  "downloadSupport": false,
+  "asyncJS": true,
+  "softsub": false
 }
