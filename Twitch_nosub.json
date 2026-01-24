@@ -11,7 +11,7 @@
   "streamType": "HLS",
   "quality": "Source",
   "baseUrl": "https://twitch.tv/",
-  "searchBaseUrl": "",
+  "searchBaseUrl": "https://gql.twitch.tv/gql",
   "scriptUrl": "https://raw.githubusercontent.com/MXFia19/Twitchnosub-Sora/refs/heads/main/script_twitch_nosub.js",
   "type": "movie",
   "downloadSupport": false,
