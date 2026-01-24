@@ -9,7 +9,7 @@ const HEADERS = {
     'Content-Type': 'application/json'
 };
 
-// --- OUTILS ---
+// --- TOOLS ---
 function safeText(str) {
     if (!str) return "";
     return str.replace(/"/g, "'").replace(/[\r\n]+/g, " ").trim();
@@ -26,12 +26,12 @@ function formatDateISO(isoString) {
     return `${year}-${month}-${day}`;
 }
 
-// --- 1. RECHERCHE (Tri Strict sans Numéros) ---
+// --- 1. SEARCH ---
 async function searchResults(keyword) {
+    console.log(`[Twitch] Searching for: ${keyword}`);
     try {
         const cleanKeyword = keyword.trim().toLowerCase();
         
-        // On demande à Twitch de trier par date, mais on ne leur fait pas confiance à 100%
         const query = {
             query: `query {
                 user(login: "${cleanKeyword}") {
@@ -55,16 +55,33 @@ async function searchResults(keyword) {
         const json = await responseText.json();
         const user = json.data?.user;
 
-        if (!user) return JSON.stringify([]);
+        // --- CASE 1: USER NOT FOUND ---
+        if (!user) {
+            console.log(`[Twitch] User ${cleanKeyword} not found.`);
+            return JSON.stringify([{
+                title: "Streamer not found. Please check spelling.",
+                image: "https://pngimg.com/uploads/twitch/twitch_PNG13.png",
+                href: "ERROR_NOT_FOUND"
+            }]);
+        }
 
         let edges = user.videos?.edges || [];
 
-        // --- TRI OBLIGATOIRE DANS LE CODE ---
-        // On trie du plus récent au plus ancien AVANT de créer le résultat final
+        // --- CASE 2: USER FOUND BUT NO VODS ---
+        if (edges.length === 0) {
+            console.log(`[Twitch] User found but 0 videos.`);
+            return JSON.stringify([{
+                title: `No videos found for ${user.displayName}.`,
+                image: "https://pngimg.com/uploads/twitch/twitch_PNG13.png",
+                href: "ERROR_NO_VODS"
+            }]);
+        }
+
+        console.log(`[Twitch] ${edges.length} videos found.`);
+
+        // --- CASE 3: DISPLAY VIDEOS (Safety Sort) ---
         edges.sort((a, b) => {
-            const dateA = new Date(a.node.publishedAt).getTime() || 0;
-            const dateB = new Date(b.node.publishedAt).getTime() || 0;
-            return dateB - dateA; // Descendant (Plus grand = plus récent en premier)
+            return new Date(b.node.publishedAt).getTime() - new Date(a.node.publishedAt).getTime();
         });
 
         const results = edges.map(edge => {
@@ -72,9 +89,8 @@ async function searchResults(keyword) {
             const dateStr = formatDateISO(video.publishedAt);
             
             let rawTitle = safeText(video.title);
-            if (!rawTitle) rawTitle = "VOD Sans Titre";
+            if (!rawTitle) rawTitle = "Untitled VOD";
 
-            // On garde juste la date entre crochets pour l'info, mais SANS numéro 01, 02...
             const displayTitle = `[${dateStr}] ${rawTitle}`;
 
             let img = video.previewThumbnailURL;
@@ -94,13 +110,34 @@ async function searchResults(keyword) {
         return JSON.stringify(results);
 
     } catch (error) {
-        return JSON.stringify([]);
+        console.log(`[Twitch] Crash: ${error}`);
+        return JSON.stringify([{
+            title: "Technical error. Check logs.",
+            image: "https://pngimg.com/uploads/twitch/twitch_PNG13.png",
+            href: "ERROR_CRASH"
+        }]);
     }
 }
 
-// --- 2. DÉTAILS ---
+// --- 2. DETAILS ---
 async function extractDetails(url) {
     try {
+        // Handle Error Messages
+        if (url === "ERROR_NOT_FOUND") {
+            return JSON.stringify([{
+                description: "The streamer you searched for does not exist on Twitch.",
+                author: "System",
+                date: "Error"
+            }]);
+        }
+        if (url === "ERROR_NO_VODS") {
+            return JSON.stringify([{
+                description: "This channel exists but has no archived videos (VODs) available.",
+                author: "System",
+                date: "Info"
+            }]);
+        }
+
         if (url.includes("/videos/")) {
             const match = url.match(/\/videos\/(\d+)/);
             const videoId = match ? match[1] : "";
@@ -128,7 +165,7 @@ async function extractDetails(url) {
                     const mins = Math.floor((video.lengthSeconds || 0) / 60);
                     const rawDesc = safeText(video.description);
                     
-                    const fullDesc = `📅 ${d} | ⏱ ${mins} min | 👁 ${video.viewCount} vues\n\n${rawDesc}`;
+                    const fullDesc = `📅 ${d} | ⏱ ${mins} min | 👁 ${video.viewCount} views\n\n${rawDesc}`;
 
                     return JSON.stringify([{
                         description: fullDesc,
@@ -139,19 +176,21 @@ async function extractDetails(url) {
                 }
             }
         }
-        return JSON.stringify([{ description: 'Info indisponible', author: 'Twitch', date: '' }]);
+        return JSON.stringify([{ description: 'Info unavailable', author: 'Twitch', date: '' }]);
     } catch (error) {
-        return JSON.stringify([{ description: 'Erreur chargement', author: 'Twitch', date: '' }]);
+        return JSON.stringify([{ description: 'Loading error', author: 'Twitch', date: '' }]);
     }
 }
 
-// --- 3. ÉPISODES ---
+// --- 3. EPISODES ---
 async function extractEpisodes(url) {
     try {
+        if (url.startsWith("ERROR_")) return JSON.stringify([]);
+
         return JSON.stringify([{
             href: url,
             number: 1,
-            title: "Lancer la Vidéo",
+            title: "Play Video",
             season: 1
         }]);
     } catch (error) { return JSON.stringify([]); }
@@ -161,15 +200,17 @@ async function extractEpisodes(url) {
 async function extractStreamUrl(url) {
     try {
         let streams = [];
-        let videoId = "";
+        
+        if (url.startsWith("ERROR_")) return JSON.stringify({ streams: [], subtitles: [] });
 
+        let videoId = "";
         if (url.includes("/videos/")) {
             const match = url.match(/\/videos\/(\d+)/);
             if (match) videoId = match[1];
         }
 
         if (videoId) {
-            // 1. NoSub (Priorité)
+            // 1. NoSub
             try {
                 const storyboardQuery = { query: `query { video(id: "${videoId}") { seekPreviewsURL } }` };
                 const sbResp = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(storyboardQuery) });
@@ -179,7 +220,7 @@ async function extractStreamUrl(url) {
                     const urlParts = seekPreviewsURL.split('/storyboards/');
                     if (urlParts.length > 0) {
                         streams.push({
-                            title: "VOD (NoSub - Sans Pub)",
+                            title: "VOD (NoSub - No Ads)",
                             streamUrl: `${urlParts[0]}/chunked/index-dvr.m3u8`,
                             headers: { "Referer": "https://www.twitch.tv/" }
                         });
@@ -187,7 +228,7 @@ async function extractStreamUrl(url) {
                 }
             } catch (e) {}
 
-            // 2. Officiel (Backup)
+            // 2. Official
             try {
                 const tokenQuery = {
                     operationName: "PlaybackAccessToken_Template",
@@ -201,7 +242,7 @@ async function extractStreamUrl(url) {
                     const safeToken = encodeURIComponent(tokenData.value);
                     const safeSig = encodeURIComponent(tokenData.signature);
                     streams.push({
-                        title: "VOD (Officiel)",
+                        title: "VOD (Official)",
                         streamUrl: `https://usher.ttvnw.net/vod/${videoId}.m3u8?nauth=${safeToken}&nauthsig=${safeSig}&allow_source=true&player_backend=mediaplayer`,
                         headers: { "Referer": "https://www.twitch.tv/" }
                     });
@@ -214,7 +255,7 @@ async function extractStreamUrl(url) {
     } catch (error) { return JSON.stringify({ streams: [], subtitles: [] }); }
 }
 
-// --- UTILITAIRE SORA ---
+// --- UTILS SORA ---
 async function soraFetch(url, options = { headers: {}, method: 'GET', body: null, encoding: 'utf-8' }) {
     try {
         if (typeof fetchv2 !== 'undefined') {
