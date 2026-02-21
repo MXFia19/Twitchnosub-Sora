@@ -1,2 +1,2 @@
 # Twitchnosub-Sora
-A module for Sorathat let you watch Twitch VODs without subscription 
+A module for Sora that let you watch Twitch VODs without subscription 
