@@ -105,9 +105,10 @@ async function extractDetails(url) {
 // --- 3. EPISODES (Les VODs du Streamer) ---
 async function extractEpisodes(url) {
     try {
+        // On récupère le pseudo depuis l'URL
         const login = url.split('twitch.tv/')[1].split('/')[0];
         
-        // On demande les 30 dernières VODs
+        // 1. NOUVELLE REQUÊTE : On demande aussi l'image (previewThumbnailURL)
         const query = {
             query: `query {
                 user(login: "${login}") {
@@ -118,6 +119,7 @@ async function extractEpisodes(url) {
                                 title
                                 publishedAt
                                 lengthSeconds
+                                previewThumbnailURL(height: 360, width: 640)
                             }
                         }
                     }
@@ -131,19 +133,36 @@ async function extractEpisodes(url) {
 
         let episodes = [];
         
-        // On transforme chaque VOD en épisode
         edges.forEach((edge, index) => {
             const video = edge.node;
             const dateStr = formatDateISO(video.publishedAt);
+            
+            // Formatage de la durée pour l'afficher sous le titre
             const mins = Math.floor(video.lengthSeconds / 60);
             const hours = Math.floor(mins / 60);
             const remainingMins = mins % 60;
-            const duration = hours > 0 ? `${hours}h${remainingMins.toString().padStart(2, '0')}` : `${mins} min`;
+            const durationLabel = hours > 0 ? `${hours}h${remainingMins.toString().padStart(2, '0')}` : `${mins} min`;
 
+            // Gestion de l'image (Remplacement des variables {width} et {height} de Twitch)
+            let img = video.previewThumbnailURL;
+            if (img && !img.includes("404_preview")) {
+                img = img.replace("{width}", "640").replace("{height}", "360");
+            } else {
+                img = "https://vod-secure.twitch.tv/_404/404_preview-640x360.jpg";
+            }
+
+            // Nettoyage du titre de la VOD
+            const videoTitle = safeText(video.title) || "VOD Sans Titre";
+
+            // 2. NOUVEL OBJET : On envoie tout à Sora pour qu'il fasse un bel affichage
             episodes.push({
                 href: `https://www.twitch.tv/videos/${video.id}`,
-                number: index + 1, // L'épisode 1 est la VOD la plus récente
-                title: `[${dateStr} - ${duration}] ${safeText(video.title)}`
+                number: index + 1,        // Ordre d'affichage
+                season: 1,                // On force la saison 1
+                title: videoTitle,        // Le Vrai titre de la VOD !
+                name: videoTitle,         // Sécurité (Sora utilise parfois 'name')
+                image: img,               // La miniature de la VOD
+                duration: `${dateStr} • ${durationLabel}` // S'affichera en petit en dessous
             });
         });
 
@@ -154,7 +173,6 @@ async function extractEpisodes(url) {
         return JSON.stringify([]); 
     }
 }
-
 // --- 4. STREAM (Inchangé, gère la vidéo) ---
 async function extractStreamUrl(url) {
     try {
