@@ -23,27 +23,101 @@ function formatDateISO(isoString) {
     const year = d.getFullYear();
     const month = (d.getMonth() + 1).toString().padStart(2, '0');
     const day = d.getDate().toString().padStart(2, '0');
-    return `${year}-${month}-${day}`;
+    return `${day}/${month}/${year}`; // Format FR plus joli
 }
 
-// --- 1. SEARCH ---
+// --- 1. SEARCH (Cherche le Streamer) ---
 async function searchResults(keyword) {
-    console.log(`[Twitch] Searching for: ${keyword}`);
+    console.log(`[Twitch] Recherche du streamer : ${keyword}`);
     try {
         const cleanKeyword = keyword.trim().toLowerCase();
         
+        // On demande uniquement les infos du profil
         const query = {
             query: `query {
                 user(login: "${cleanKeyword}") {
                     login
                     displayName
-                    videos(first: 20, type: ARCHIVE, sort: TIME) {
+                    profileImageURL(width: 300)
+                }
+            }`
+        };
+
+        const responseText = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(query) });
+        const json = await responseText.json();
+        const user = json.data?.user;
+
+        if (!user) {
+            console.log(`[Twitch] Streamer ${cleanKeyword} introuvable.`);
+            return JSON.stringify([]);
+        }
+
+        // On renvoie le streamer comme un "Show" avec sa photo
+        return JSON.stringify([{
+            title: user.displayName,
+            image: user.profileImageURL || "https://pngimg.com/uploads/twitch/twitch_PNG13.png",
+            href: `https://www.twitch.tv/${user.login}`
+        }]);
+
+    } catch (error) {
+        console.log(`[Twitch] Erreur Search : ${error}`);
+        return JSON.stringify([]);
+    }
+}
+
+// --- 2. DETAILS (Bio du Streamer) ---
+async function extractDetails(url) {
+    try {
+        // On extrait le pseudo depuis l'URL (ex: https://www.twitch.tv/zerator)
+        const login = url.split('twitch.tv/')[1].split('/')[0];
+        
+        const query = {
+            query: `query {
+                user(login: "${login}") {
+                    description
+                    createdAt
+                    followers { totalCount }
+                }
+            }`
+        };
+        
+        const responseText = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(query) });
+        const json = await responseText.json();
+        const user = json.data?.user;
+
+        if (user) {
+            const desc = safeText(user.description) || "Aucune biographie disponible pour cette chaîne.";
+            const followers = user.followers?.totalCount ? user.followers.totalCount.toLocaleString('fr-FR') : "0";
+            
+            return JSON.stringify([{
+                description: desc,
+                aliases: `Followers : ${followers}`,
+                airdate: `Créé le : ${formatDateISO(user.createdAt)}`
+            }]);
+        }
+        
+        return JSON.stringify([{ description: 'Info indisponible', aliases: '', airdate: '' }]);
+    } catch (error) {
+        return JSON.stringify([{ description: 'Erreur de chargement', aliases: '', airdate: '' }]);
+    }
+}
+
+// --- 3. EPISODES (Les VODs du Streamer) ---
+async function extractEpisodes(url) {
+    try {
+        const login = url.split('twitch.tv/')[1].split('/')[0];
+        
+        // On demande les 30 dernières VODs
+        const query = {
+            query: `query {
+                user(login: "${login}") {
+                    videos(first: 30, type: ARCHIVE, sort: TIME) {
                         edges {
                             node {
                                 id
                                 title
                                 publishedAt
-                                previewThumbnailURL(height: 360, width: 640)
+                                lengthSeconds
                             }
                         }
                     }
@@ -53,164 +127,47 @@ async function searchResults(keyword) {
 
         const responseText = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(query) });
         const json = await responseText.json();
-        const user = json.data?.user;
+        let edges = json.data?.user?.videos?.edges || [];
 
-        // --- CASE 1: USER NOT FOUND ---
-        if (!user) {
-            console.log(`[Twitch] User ${cleanKeyword} not found.`);
-            return JSON.stringify([{
-                title: "Streamer not found. Please check spelling.",
-                image: "https://pngimg.com/uploads/twitch/twitch_PNG13.png",
-                href: "ERROR_NOT_FOUND"
-            }]);
-        }
-
-        let edges = user.videos?.edges || [];
-
-        // --- CASE 2: USER FOUND BUT NO VODS ---
-        if (edges.length === 0) {
-            console.log(`[Twitch] User found but 0 videos.`);
-            return JSON.stringify([{
-                title: `No videos found for ${user.displayName}.`,
-                image: "https://pngimg.com/uploads/twitch/twitch_PNG13.png",
-                href: "ERROR_NO_VODS"
-            }]);
-        }
-
-        console.log(`[Twitch] ${edges.length} videos found.`);
-
-        // --- CASE 3: DISPLAY VIDEOS (Safety Sort) ---
-        edges.sort((a, b) => {
-            return new Date(b.node.publishedAt).getTime() - new Date(a.node.publishedAt).getTime();
-        });
-
-        const results = edges.map(edge => {
+        let episodes = [];
+        
+        // On transforme chaque VOD en épisode
+        edges.forEach((edge, index) => {
             const video = edge.node;
             const dateStr = formatDateISO(video.publishedAt);
-            
-            let rawTitle = safeText(video.title);
-            if (!rawTitle) rawTitle = "Untitled VOD";
+            const mins = Math.floor(video.lengthSeconds / 60);
+            const hours = Math.floor(mins / 60);
+            const remainingMins = mins % 60;
+            const duration = hours > 0 ? `${hours}h${remainingMins.toString().padStart(2, '0')}` : `${mins} min`;
 
-            const displayTitle = `[${dateStr}] ${rawTitle}`;
-
-            let img = video.previewThumbnailURL;
-            if (img && !img.includes("404_preview")) {
-                img = img.replace("{width}", "1280").replace("{height}", "720");
-            } else {
-                img = "https://vod-secure.twitch.tv/_404/404_preview-640x360.jpg";
-            }
-
-            return {
-                title: displayTitle,
-                image: img,
-                href: `https://www.twitch.tv/videos/${video.id}`
-            };
+            episodes.push({
+                href: `https://www.twitch.tv/videos/${video.id}`,
+                number: index + 1, // L'épisode 1 est la VOD la plus récente
+                title: `[${dateStr} - ${duration}] ${safeText(video.title)}`
+            });
         });
 
-        return JSON.stringify(results);
+        return JSON.stringify(episodes);
 
-    } catch (error) {
-        console.log(`[Twitch] Crash: ${error}`);
-        return JSON.stringify([{
-            title: "Technical error. Check logs.",
-            image: "https://pngimg.com/uploads/twitch/twitch_PNG13.png",
-            href: "ERROR_CRASH"
-        }]);
+    } catch (error) { 
+        console.log(`[Twitch] Erreur Episodes : ${error}`);
+        return JSON.stringify([]); 
     }
 }
 
-// --- 2. DETAILS ---
-async function extractDetails(url) {
-    try {
-        // Handle Error Messages
-        if (url === "ERROR_NOT_FOUND") {
-            return JSON.stringify([{
-                description: "The streamer you searched for does not exist on Twitch.",
-                author: "System",
-                date: "Error"
-            }]);
-        }
-        if (url === "ERROR_NO_VODS") {
-            return JSON.stringify([{
-                description: "This channel exists but has no archived videos (VODs) available.",
-                author: "System",
-                date: "Info"
-            }]);
-        }
-
-        if (url.includes("/videos/")) {
-            const match = url.match(/\/videos\/(\d+)/);
-            const videoId = match ? match[1] : "";
-
-            if (videoId) {
-                const query = {
-                    query: `query {
-                        video(id: "${videoId}") {
-                            title
-                            description
-                            publishedAt
-                            viewCount
-                            lengthSeconds
-                            owner { displayName }
-                        }
-                    }`
-                };
-                const responseText = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(query) });
-                const json = await responseText.json();
-                const video = json.data?.video;
-
-                if (video) {
-                    const author = video.owner?.displayName || "Streamer";
-                    const d = formatDateISO(video.publishedAt);
-                    const mins = Math.floor((video.lengthSeconds || 0) / 60);
-                    const rawDesc = safeText(video.description);
-                    
-                    const fullDesc = `📅 ${d} | ⏱ ${mins} min | 👁 ${video.viewCount} views\n\n${rawDesc}`;
-
-                    return JSON.stringify([{
-                        description: fullDesc,
-                        author: author,
-                        date: d,
-                        aliases: `${mins} min`
-                    }]);
-                }
-            }
-        }
-        return JSON.stringify([{ description: 'Info unavailable', author: 'Twitch', date: '' }]);
-    } catch (error) {
-        return JSON.stringify([{ description: 'Loading error', author: 'Twitch', date: '' }]);
-    }
-}
-
-// --- 3. EPISODES ---
-async function extractEpisodes(url) {
-    try {
-        if (url.startsWith("ERROR_")) return JSON.stringify([]);
-
-        return JSON.stringify([{
-            href: url,
-            number: 1,
-            title: "Play Video",
-            season: 1
-        }]);
-    } catch (error) { return JSON.stringify([]); }
-}
-
-// --- 4. STREAM ---
+// --- 4. STREAM (Inchangé, gère la vidéo) ---
 async function extractStreamUrl(url) {
     try {
         let streams = [];
-        
-        if (url.startsWith("ERROR_")) return JSON.stringify({ streams: [], subtitles: [] });
-
         let videoId = "";
+        
         if (url.includes("/videos/")) {
             const match = url.match(/\/videos\/(\d+)/);
             if (match) videoId = match[1];
         }
 
         if (videoId) {
-            // 1. NoSub
+            // 1. NoSub (Version sans pub si dispo)
             try {
                 const storyboardQuery = { query: `query { video(id: "${videoId}") { seekPreviewsURL } }` };
                 const sbResp = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(storyboardQuery) });
@@ -220,7 +177,7 @@ async function extractStreamUrl(url) {
                     const urlParts = seekPreviewsURL.split('/storyboards/');
                     if (urlParts.length > 0) {
                         streams.push({
-                            title: "VOD (NoSub - No Ads)",
+                            title: "VOD (NoSub - Sans Pub)",
                             streamUrl: `${urlParts[0]}/chunked/index-dvr.m3u8`,
                             headers: { "Referer": "https://www.twitch.tv/" }
                         });
@@ -228,7 +185,7 @@ async function extractStreamUrl(url) {
                 }
             } catch (e) {}
 
-            // 2. Official
+            // 2. Officiel
             try {
                 const tokenQuery = {
                     operationName: "PlaybackAccessToken_Template",
@@ -242,7 +199,7 @@ async function extractStreamUrl(url) {
                     const safeToken = encodeURIComponent(tokenData.value);
                     const safeSig = encodeURIComponent(tokenData.signature);
                     streams.push({
-                        title: "VOD (Official)",
+                        title: "VOD (Officiel)",
                         streamUrl: `https://usher.ttvnw.net/vod/${videoId}.m3u8?nauth=${safeToken}&nauthsig=${safeSig}&allow_source=true&player_backend=mediaplayer`,
                         headers: { "Referer": "https://www.twitch.tv/" }
                     });
