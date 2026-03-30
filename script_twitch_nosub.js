@@ -23,95 +23,20 @@ function formatDateISO(isoString) {
     const year = d.getFullYear();
     const month = (d.getMonth() + 1).toString().padStart(2, '0');
     const day = d.getDate().toString().padStart(2, '0');
-    return `${day}/${month}/${year}`; // Format FR plus joli
+    return `${day}/${month}/${year}`; 
 }
 
-// --- 1. SEARCH (Cherche le Streamer) ---
+// --- 1. SEARCH (Affiche directement les VODs) ---
 async function searchResults(keyword) {
-    console.log(`[Twitch] Recherche du streamer : ${keyword}`);
+    console.log(`[Twitch] Recherche des VODs pour le streamer : ${keyword}`);
     try {
-        const cleanKeyword = keyword.trim().toLowerCase();
+        // On nettoie le pseudo (pas d'espaces dans un pseudo Twitch)
+        const login = keyword.trim().toLowerCase().replace(/\s+/g, '');
         
-        // On demande uniquement les infos du profil
         const query = {
             query: `query {
-                user(login: "${cleanKeyword}") {
-                    login
+                user(login: "${login}") {
                     displayName
-                    profileImageURL(width: 300)
-                }
-            }`
-        };
-
-        const responseText = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(query) });
-        const json = await responseText.json();
-        const user = json.data?.user;
-
-        if (!user) {
-            console.log(`[Twitch] Streamer ${cleanKeyword} introuvable.`);
-            return JSON.stringify([]);
-        }
-
-        // On renvoie le streamer comme un "Show" avec sa photo
-        return JSON.stringify([{
-            title: user.displayName,
-            image: user.profileImageURL || "https://pngimg.com/uploads/twitch/twitch_PNG13.png",
-            href: `https://www.twitch.tv/${user.login}`
-        }]);
-
-    } catch (error) {
-        console.log(`[Twitch] Erreur Search : ${error}`);
-        return JSON.stringify([]);
-    }
-}
-
-// --- 2. DETAILS (Bio du Streamer) ---
-async function extractDetails(url) {
-    try {
-        // On extrait le pseudo depuis l'URL (ex: https://www.twitch.tv/zerator)
-        const login = url.split('twitch.tv/')[1].split('/')[0];
-        
-        const query = {
-            query: `query {
-                user(login: "${login}") {
-                    description
-                    createdAt
-                    followers { totalCount }
-                }
-            }`
-        };
-        
-        const responseText = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(query) });
-        const json = await responseText.json();
-        const user = json.data?.user;
-
-        if (user) {
-            const desc = safeText(user.description) || "Aucune biographie disponible pour cette chaîne.";
-            const followers = user.followers?.totalCount ? user.followers.totalCount.toLocaleString('fr-FR') : "0";
-            
-            return JSON.stringify([{
-                description: desc,
-                aliases: `Followers : ${followers}`,
-                airdate: `Créé le : ${formatDateISO(user.createdAt)}`
-            }]);
-        }
-        
-        return JSON.stringify([{ description: 'Info indisponible', aliases: '', airdate: '' }]);
-    } catch (error) {
-        return JSON.stringify([{ description: 'Erreur de chargement', aliases: '', airdate: '' }]);
-    }
-}
-
-// --- 3. EPISODES (Les VODs du Streamer) ---
-async function extractEpisodes(url) {
-    try {
-        // On récupère le pseudo depuis l'URL
-        const login = url.split('twitch.tv/')[1].split('/')[0];
-        
-        // 1. NOUVELLE REQUÊTE : On demande aussi l'image (previewThumbnailURL)
-        const query = {
-            query: `query {
-                user(login: "${login}") {
                     videos(first: 30, type: ARCHIVE, sort: TIME) {
                         edges {
                             node {
@@ -129,21 +54,27 @@ async function extractEpisodes(url) {
 
         const responseText = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(query) });
         const json = await responseText.json();
-        let edges = json.data?.user?.videos?.edges || [];
-
-        let episodes = [];
         
-        edges.forEach((edge, index) => {
+        const user = json.data?.user;
+        const edges = user?.videos?.edges || [];
+
+        if (!user || edges.length === 0) {
+            console.log(`[Twitch] Streamer ${login} introuvable ou aucune VOD.`);
+            return JSON.stringify([]);
+        }
+
+        const results = [];
+        
+        edges.forEach((edge) => {
             const video = edge.node;
-            const dateStr = formatDateISO(video.publishedAt);
             
-            // Formatage de la durée pour l'afficher sous le titre
+            // Formatage de la durée
             const mins = Math.floor(video.lengthSeconds / 60);
             const hours = Math.floor(mins / 60);
             const remainingMins = mins % 60;
             const durationLabel = hours > 0 ? `${hours}h${remainingMins.toString().padStart(2, '0')}` : `${mins} min`;
 
-            // Gestion de l'image (Remplacement des variables {width} et {height} de Twitch)
+            // Gestion de l'image
             let img = video.previewThumbnailURL;
             if (img && !img.includes("404_preview")) {
                 img = img.replace("{width}", "640").replace("{height}", "360");
@@ -151,29 +82,80 @@ async function extractEpisodes(url) {
                 img = "https://vod-secure.twitch.tv/_404/404_preview-640x360.jpg";
             }
 
-            // Nettoyage du titre de la VOD
             const videoTitle = safeText(video.title) || "VOD Sans Titre";
 
-            // 2. NOUVEL OBJET : On envoie tout à Sora pour qu'il fasse un bel affichage
-            episodes.push({
-                href: `https://www.twitch.tv/videos/${video.id}`,
-                number: index + 1,        // Ordre d'affichage
-                season: 1,                // On force la saison 1
-                title: videoTitle,        // Le Vrai titre de la VOD !
-                name: videoTitle,         // Sécurité (Sora utilise parfois 'name')
-                image: img,               // La miniature de la VOD
-                duration: `${dateStr} • ${durationLabel}` // S'affichera en petit en dessous
+            // On ajoute la durée dans le titre pour que ce soit visible dans la recherche
+            results.push({
+                title: `[${durationLabel}] ${videoTitle}`,
+                image: img,
+                href: `https://www.twitch.tv/videos/${video.id}`
             });
         });
 
-        return JSON.stringify(episodes);
+        return JSON.stringify(results);
 
+    } catch (error) {
+        console.log(`[Twitch] Erreur Search : ${error}`);
+        return JSON.stringify([]);
+    }
+}
+
+// --- 2. DETAILS (Détails de la VOD) ---
+async function extractDetails(url) {
+    try {
+        // L'URL est maintenant celle d'une vidéo (ex: https://www.twitch.tv/videos/123456789)
+        const videoId = url.split('/videos/')[1];
+        
+        const query = {
+            query: `query {
+                video(id: "${videoId}") {
+                    title
+                    description
+                    publishedAt
+                    viewCount
+                    owner { displayName }
+                }
+            }`
+        };
+        
+        const responseText = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(query) });
+        const json = await responseText.json();
+        const video = json.data?.video;
+
+        if (video) {
+            const desc = safeText(video.description) || "Aucune description pour cette VOD.";
+            const views = video.viewCount ? video.viewCount.toLocaleString('fr-FR') : "0";
+            const owner = video.owner?.displayName || "Inconnu";
+            
+            return JSON.stringify([{
+                description: desc,
+                aliases: `Chaîne : ${owner} | Vues : ${views}`,
+                airdate: formatDateISO(video.publishedAt)
+            }]);
+        }
+        
+        return JSON.stringify([{ description: 'Info indisponible', aliases: '', airdate: '' }]);
+    } catch (error) {
+        return JSON.stringify([{ description: 'Erreur de chargement', aliases: '', airdate: '' }]);
+    }
+}
+
+// --- 3. EPISODES (Un seul épisode : la VOD) ---
+async function extractEpisodes(url) {
+    try {
+        // Puisqu'on est DÉJÀ sur la VOD, on renvoie simplement un épisode unique
+        return JSON.stringify([{
+            href: url,
+            number: 1,
+            season: 1,
+            title: "Lancer la VOD"
+        }]);
     } catch (error) { 
-        console.log(`[Twitch] Erreur Episodes : ${error}`);
         return JSON.stringify([]); 
     }
 }
-// --- 4. STREAM (Inchangé, gère la vidéo) ---
+
+// --- 4. STREAM (Gère l'extraction du .m3u8) ---
 async function extractStreamUrl(url) {
     try {
         let streams = [];
@@ -185,7 +167,7 @@ async function extractStreamUrl(url) {
         }
 
         if (videoId) {
-            // 1. NoSub (Version sans pub si dispo)
+            // 1. NoSub (Version sans pub si dispo via les Storyboards)
             try {
                 const storyboardQuery = { query: `query { video(id: "${videoId}") { seekPreviewsURL } }` };
                 const sbResp = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(storyboardQuery) });
@@ -203,7 +185,7 @@ async function extractStreamUrl(url) {
                 }
             } catch (e) {}
 
-            // 2. Officiel
+            // 2. Officiel via le Token
             try {
                 const tokenQuery = {
                     operationName: "PlaybackAccessToken_Template",
@@ -213,6 +195,7 @@ async function extractStreamUrl(url) {
                 const tokenResp = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(tokenQuery) });
                 const tokenJson = await tokenResp.json();
                 const tokenData = tokenJson.data?.videoPlaybackAccessToken;
+                
                 if (tokenData) {
                     const safeToken = encodeURIComponent(tokenData.value);
                     const safeSig = encodeURIComponent(tokenData.signature);
@@ -227,7 +210,9 @@ async function extractStreamUrl(url) {
 
         return JSON.stringify({ streams: streams, subtitles: [] });
 
-    } catch (error) { return JSON.stringify({ streams: [], subtitles: [] }); }
+    } catch (error) { 
+        return JSON.stringify({ streams: [], subtitles: [] }); 
+    }
 }
 
 // --- UTILS SORA ---
