@@ -1,5 +1,5 @@
 // ==========================================
-// ⚙️ MODULE SORA -- TWITCH (Live + VODs + Supabase)
+// ⚙️ MODULE SORA -- TWITCH (Live + VODs + Traceur de Liens)
 // ==========================================
 
 const CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
@@ -67,7 +67,6 @@ async function searchResults(keyword) {
     try {
         const login = keyword.trim().toLowerCase().replace(/\s+/g, '');
         
-        // On demande le stream actuel (s'il existe) ET les VODs
         const query = {
             query: `query {
                 user(login: "${login}") {
@@ -106,7 +105,7 @@ async function searchResults(keyword) {
         const stream = user.stream;
         const edges = user.videos?.edges || [];
 
-        // 🟢 S'IL EST EN DIRECT, ON L'AJOUTE EN PREMIER
+        // 🟢 S'IL EST EN DIRECT
         if (stream) {
             let streamImg = stream.previewImageURL || "https://vod-secure.twitch.tv/_404/404_preview-640x360.jpg";
             let viewers = stream.viewersCount ? stream.viewersCount.toLocaleString('fr-FR') : "0";
@@ -114,11 +113,11 @@ async function searchResults(keyword) {
             results.push({
                 title: `🔴 [EN DIRECT] ${safeText(stream.title)}`,
                 image: streamImg,
-                href: `https://www.twitch.tv/${login}` // L'URL d'un Live est la chaîne racine
+                href: `https://www.twitch.tv/${login}`
             });
         }
 
-        // 🟣 ENSUITE ON AJOUTE LES VODS
+        // 🟣 LES VODS
         edges.forEach((edge) => {
             const video = edge.node;
             const mins = Math.floor(video.lengthSeconds / 60);
@@ -136,7 +135,7 @@ async function searchResults(keyword) {
             results.push({
                 title: `🟣 [${durationLabel}] ${safeText(video.title) || "VOD Sans Titre"}`,
                 image: img,
-                href: `https://www.twitch.tv/videos/${video.id}` // L'URL d'une VOD contient /videos/
+                href: `https://www.twitch.tv/videos/${video.id}`
             });
         });
 
@@ -152,19 +151,15 @@ async function searchResults(keyword) {
     }
 }
 
-// --- 2. DÉTAILS (Gère le Live ou la VOD) ---
+// --- 2. DÉTAILS ---
 async function extractDetails(url) {
     sendSupabaseLog("Twitch", "DETAILS", { anime_url: url });
 
     try {
         let query;
-
-        // Cas 1 : C'est une VOD
         if (url.includes('/videos/')) {
             const videoId = url.split('/videos/')[1];
-            query = {
-                query: `query { video(id: "${videoId}") { description publishedAt viewCount owner { displayName } } }`
-            };
+            query = { query: `query { video(id: "${videoId}") { description publishedAt viewCount owner { displayName } } }` };
             const responseText = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(query) });
             const json = await responseText.json();
             const video = json.data?.video;
@@ -176,12 +171,9 @@ async function extractDetails(url) {
                 return JSON.stringify([{ description: desc, aliases: `Chaîne : ${owner} | Vues : ${views}`, airdate: formatDateISO(video.publishedAt) }]);
             }
         } 
-        // Cas 2 : C'est un Live
         else {
             const login = url.split('twitch.tv/')[1].split('/')[0];
-            query = {
-                query: `query { user(login: "${login}") { description stream { viewersCount createdAt } } }`
-            };
+            query = { query: `query { user(login: "${login}") { description stream { viewersCount createdAt } } }` };
             const responseText = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(query) });
             const json = await responseText.json();
             const user = json.data?.user;
@@ -199,7 +191,7 @@ async function extractDetails(url) {
     }
 }
 
-// --- 3. ÉPISODES (Un seul épisode) ---
+// --- 3. ÉPISODES ---
 async function extractEpisodes(url) {
     try {
         let epTitle = url.includes('/videos/') ? "Lancer la VOD" : "Rejoindre le Direct";
@@ -209,7 +201,7 @@ async function extractEpisodes(url) {
     }
 }
 
-// --- 4. STREAM (Gère l'extraction Live & VOD) ---
+// --- 4. STREAM (Avec l'aspirateur à liens activé !) ---
 async function extractStreamUrl(url) {
     console.log(`[Lecteur Twitch] 🎬 Demande de flux pour : ${url}`);
     try {
@@ -222,7 +214,6 @@ async function extractStreamUrl(url) {
         if (isVod) {
             const videoId = url.split('/videos/')[1];
             
-            // Tentative 1 : NoSub (Sans pub)
             try {
                 const sbQuery = { query: `query { video(id: "${videoId}") { seekPreviewsURL } }` };
                 const sbResp = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(sbQuery) });
@@ -237,7 +228,6 @@ async function extractStreamUrl(url) {
                 }
             } catch (e) {}
 
-            // Tentative 2 : Officiel
             try {
                 const tokenQuery = {
                     operationName: "PlaybackAccessToken_Template",
@@ -283,8 +273,16 @@ async function extractStreamUrl(url) {
             } catch (e) {}
         }
 
-        // 📡 Log Supabase
-        sendSupabaseLog("Twitch", "PLAYER", { anime_url: url, season_number: "1", ep_number: "1", streams_found: streams.length, servers: extractedNames });
+        // 📡 Log Supabase AVEC LES LIENS DES LECTEURS 📡
+        sendSupabaseLog("Twitch", "PLAYER", { 
+            anime_url: url, 
+            season_number: "1", 
+            ep_number: "1", 
+            streams_found: streams.length, 
+            servers: extractedNames,
+            video_links: streams.map(s => s.streamUrl) // 👈 L'aspiration des liens est ici
+        });
+
         if (failedLinks.length > 0) {
             sendSupabaseLog("Twitch", "UNSUPPORTED_HOSTS", { anime_url: url, season_number: "1", ep_number: "1", failed_count: failedLinks.length, failed_links: failedLinks });
         }
