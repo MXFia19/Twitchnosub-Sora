@@ -201,7 +201,7 @@ async function extractEpisodes(url) {
     }
 }
 
-// --- 4. STREAM (Avec l'aspirateur à liens activé !) ---
+// --- 4. STREAM (Fix de l'API Token Officielle) ---
 async function extractStreamUrl(url) {
     console.log(`[Lecteur Twitch] 🎬 Demande de flux pour : ${url}`);
     try {
@@ -214,6 +214,35 @@ async function extractStreamUrl(url) {
         if (isVod) {
             const videoId = url.split('/videos/')[1];
             
+            // Tentative 1 : Officiel (Priorité absolue)
+            try {
+                // Requête simplifiée au maximum pour éviter les bugs d'encodage JSON
+                const tokenQuery = {
+                    query: `query { videoPlaybackAccessToken(id: "${videoId}", params: {platform: "web", playerBackend: "mediaplayer", playerType: "site"}) { value signature } }`
+                };
+                
+                const tokenResp = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(tokenQuery) });
+                const tokenJson = await tokenResp.json();
+                const tokenData = tokenJson.data?.videoPlaybackAccessToken;
+                
+                if (tokenData) {
+                    const safeToken = encodeURIComponent(tokenData.value);
+                    const safeSig = encodeURIComponent(tokenData.signature);
+                    streams.push({ 
+                        title: "VOD (Officiel Twitch)", 
+                        streamUrl: `https://usher.ttvnw.net/vod/${videoId}.m3u8?nauth=${safeToken}&nauthsig=${safeSig}&allow_source=true&player_backend=mediaplayer`, 
+                        headers: { "Referer": "https://www.twitch.tv/" } 
+                    });
+                    extractedNames.push("VOD Officiel");
+                } else {
+                    failedLinks.push({ server_name: "Twitch VOD Token (Rejeté)", url: url });
+                    console.log(`[Lecteur Twitch] 🚨 Échec Token VOD : ${JSON.stringify(tokenJson)}`);
+                }
+            } catch (e) {
+                console.log(`[Lecteur Twitch] 🚨 Erreur Crash Token VOD : ${e.message}`);
+            }
+
+            // Tentative 2 : NoSub (Secours)
             try {
                 const sbQuery = { query: `query { video(id: "${videoId}") { seekPreviewsURL } }` };
                 const sbResp = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(sbQuery) });
@@ -222,29 +251,13 @@ async function extractStreamUrl(url) {
                 if (seekPreviewsURL) {
                     const urlParts = seekPreviewsURL.split('/storyboards/');
                     if (urlParts.length > 0) {
-                        streams.push({ title: "VOD (Sans Pub)", streamUrl: `${urlParts[0]}/chunked/index-dvr.m3u8`, headers: { "Referer": "https://www.twitch.tv/" } });
-                        extractedNames.push("VOD Sans Pub");
+                        streams.push({ 
+                            title: "VOD (Serveur Brut Cloudfront)", 
+                            streamUrl: `${urlParts[0]}/chunked/index-dvr.m3u8`, 
+                            headers: { "Referer": "https://www.twitch.tv/" } 
+                        });
+                        extractedNames.push("VOD Cloudfront");
                     }
-                }
-            } catch (e) {}
-
-            try {
-                const tokenQuery = {
-                    operationName: "PlaybackAccessToken_Template",
-                    query: "query PlaybackAccessToken_Template($login: String!, $isLive: Boolean!, $vodID: ID!, $isVod: Boolean!, $playerType: String!) { videoPlaybackAccessToken(id: $vodID, params: {platform: \"web\", playerBackend: \"mediaplayer\", playerType: $playerType}) @include(if: $isVod) { value signature __typename } }",
-                    variables: { isLive: false, login: "", isVod: true, vodID: videoId, playerType: "site" }
-                };
-                const tokenResp = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(tokenQuery) });
-                const tokenJson = await tokenResp.json();
-                const tokenData = tokenJson.data?.videoPlaybackAccessToken;
-                
-                if (tokenData) {
-                    const safeToken = encodeURIComponent(tokenData.value);
-                    const safeSig = encodeURIComponent(tokenData.signature);
-                    streams.push({ title: "VOD (Officiel)", streamUrl: `https://usher.ttvnw.net/vod/${videoId}.m3u8?nauth=${safeToken}&nauthsig=${safeSig}&allow_source=true&player_backend=mediaplayer`, headers: { "Referer": "https://www.twitch.tv/" } });
-                    extractedNames.push("VOD Officiel");
-                } else {
-                    failedLinks.push({ server_name: "Twitch VOD Token", url: url });
                 }
             } catch (e) {}
         } 
@@ -253,11 +266,11 @@ async function extractStreamUrl(url) {
         else {
             const login = url.split('twitch.tv/')[1].split('/')[0];
             try {
+                // Requête simplifiée pour le Live
                 const tokenQuery = {
-                    operationName: "PlaybackAccessToken_Template",
-                    query: "query PlaybackAccessToken_Template($login: String!, $isLive: Boolean!, $vodID: ID!, $isVod: Boolean!, $playerType: String!) { streamPlaybackAccessToken(channelName: $login, params: {platform: \"web\", playerBackend: \"mediaplayer\", playerType: $playerType}) @include(if: $isLive) { value signature __typename } }",
-                    variables: { isLive: true, login: login, isVod: false, vodID: "", playerType: "site" }
+                    query: `query { streamPlaybackAccessToken(channelName: "${login}", params: {platform: "web", playerBackend: "mediaplayer", playerType: "site"}) { value signature } }`
                 };
+                
                 const tokenResp = await soraFetch(GQL_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(tokenQuery) });
                 const tokenJson = await tokenResp.json();
                 const tokenData = tokenJson.data?.streamPlaybackAccessToken;
@@ -265,10 +278,14 @@ async function extractStreamUrl(url) {
                 if (tokenData) {
                     const safeToken = encodeURIComponent(tokenData.value);
                     const safeSig = encodeURIComponent(tokenData.signature);
-                    streams.push({ title: "Live (Qualité Source)", streamUrl: `https://usher.ttvnw.net/api/channel/hls/${login}.m3u8?allow_source=true&sig=${safeSig}&token=${safeToken}&player_backend=mediaplayer`, headers: { "Referer": "https://www.twitch.tv/" } });
+                    streams.push({ 
+                        title: "Live (Officiel Twitch)", 
+                        streamUrl: `https://usher.ttvnw.net/api/channel/hls/${login}.m3u8?allow_source=true&sig=${safeSig}&token=${safeToken}&player_backend=mediaplayer`, 
+                        headers: { "Referer": "https://www.twitch.tv/" } 
+                    });
                     extractedNames.push("Live Officiel");
                 } else {
-                    failedLinks.push({ server_name: "Twitch Live Token", url: url });
+                    failedLinks.push({ server_name: "Twitch Live Token (Rejeté)", url: url });
                 }
             } catch (e) {}
         }
@@ -280,19 +297,21 @@ async function extractStreamUrl(url) {
             ep_number: "1", 
             streams_found: streams.length, 
             servers: extractedNames,
-            video_links: streams.map(s => s.streamUrl) // 👈 L'aspiration des liens est ici
+            video_links: streams.map(s => s.streamUrl)
         });
 
         if (failedLinks.length > 0) {
             sendSupabaseLog("Twitch", "UNSUPPORTED_HOSTS", { anime_url: url, season_number: "1", ep_number: "1", failed_count: failedLinks.length, failed_links: failedLinks });
         }
 
-        return JSON.stringify(streams.length > 0 ? { type: "servers", streams: streams } : { type: "none" });
+        // Inverse l'ordre pour mettre l'Officiel Twitch en premier choix par défaut
+        return JSON.stringify(streams.length > 0 ? { type: "servers", streams: streams.reverse() } : { type: "none" });
 
     } catch (error) { 
         return JSON.stringify({ type: "none" }); 
     }
 }
+
 
 // --- UTILS SORA ---
 async function soraFetch(url, options = { headers: {}, method: 'GET', body: null, encoding: 'utf-8' }) {
