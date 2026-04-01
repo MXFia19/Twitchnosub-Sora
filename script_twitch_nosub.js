@@ -367,8 +367,8 @@ async function extractStreamUrl(url) {
       const login = url.split('twitch.tv/')[1].split('/')[0];
 
       // --- Official Live servers: embed + popout only (site removed) ---
-      const playerTypes = ['embed', 'popout'];
-      const typeLabels  = { embed: 'Embed', popout: 'Popout' };
+      const playerTypes = ['popout'];
+      const typeLabels  = { popout: 'Popout' };
 
       for (const pt of playerTypes) {
         try {
