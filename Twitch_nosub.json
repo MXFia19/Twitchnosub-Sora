@@ -16,5 +16,6 @@
   "type": "vod/livestream",
   "downloadSupport": false,
   "asyncJS": true,
-  "softsub": false
+  "softsub": false,
+  "note": "Search for the streamer name and his vod will appear (live support)"
 }
