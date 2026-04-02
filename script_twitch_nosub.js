@@ -214,7 +214,7 @@ async function searchResults(keyword) {
             id title viewersCount
             previewImageURL(width: 640, height: 360)
           }
-          videos(first: 30, type: ARCHIVE, sort: TIME) {
+          videos(first: 10, type: ARCHIVE, sort: TIME) {
             edges {
               node {
                 id title publishedAt lengthSeconds
